@@ -1,0 +1,8 @@
+{
+	"appId": "com.raynista.app",
+	"appName": "Raynista",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https"
+	}
+}

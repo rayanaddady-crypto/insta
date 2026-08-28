@@ -1,0 +1,9 @@
+{
+  "name": "Raymi",
+  "description": "Raymi - Next-gen black & blue social media platform. Experience high-speed messaging, reels, stories, and feed with interactive sound effects and modern design.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
