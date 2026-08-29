@@ -167,9 +167,11 @@ async function ensureRaynaiUser() {
 
 export async function ensureDbReady(): Promise<void> {
   if (!dbInitPromise) {
-    dbInitPromise = initTursoTables().catch(err => {
+    dbInitPromise = (async () => {
+      await checkDbConnection();
+      await initTursoTables();
+    })().catch(err => {
       console.error("⚠️ [Turso DB] Database init failed:", err);
-      // Reset so subsequent requests can attempt initialization if transient
       dbInitPromise = null;
       throw err;
     });
@@ -557,9 +559,6 @@ async function seedTursoDb() {
   console.log("🌱 Database seeded successfully!");
 }
 
-// Call tables init
-initTursoTables().catch(err => console.error("⚠️ [Turso DB] Boot error:", err));
-
 // ====================================================================
 // EXPRESS SERVER & REAL-TIME SOCKETS
 // ====================================================================
@@ -573,6 +572,25 @@ const io = new SocketIOServer(server, {
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+// Guarantee DB is initialized on incoming requests
+app.use(async (req, res, next) => {
+  // Normalize rewrites from Vercel if needed
+  if (req.url && !req.url.startsWith("/api") && !req.url.startsWith("/uploads") && !req.url.startsWith("/socket.io") && !req.url.startsWith("/assets")) {
+    if (req.url.startsWith("/login") || req.url.startsWith("/register") || req.url.startsWith("/auth") || req.url.startsWith("/check-username") || req.url.startsWith("/health")) {
+      req.url = "/api" + (req.url.startsWith("/") ? req.url : "/" + req.url);
+    }
+  }
+  try {
+    await ensureDbReady();
+    next();
+  } catch (err: any) {
+    console.error("⚠️ [DB Middleware Error]:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Database initialization failed: " + (err.message || "Unknown error") });
+    }
+  }
+});
 
 // Health check endpoints
 app.get(["/api/health", "/api", "/health"], (req, res) => {
