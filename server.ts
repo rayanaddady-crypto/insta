@@ -427,7 +427,9 @@ async function initTursoTables() {
       "ALTER TABLE messages ADD COLUMN reply_to_text TEXT DEFAULT NULL",
       "ALTER TABLE messages ADD COLUMN reply_to_username TEXT DEFAULT NULL",
       "ALTER TABLE messages ADD COLUMN is_edited INTEGER DEFAULT 0",
-      "ALTER TABLE messages ADD COLUMN is_deleted INTEGER DEFAULT 0"
+      "ALTER TABLE messages ADD COLUMN is_deleted INTEGER DEFAULT 0",
+      "ALTER TABLE conversations ADD COLUMN name_user1 TEXT",
+      "ALTER TABLE conversations ADD COLUMN name_user2 TEXT"
     ];
     for (const alterSql of messageAlterations) {
       try {
@@ -3334,35 +3336,21 @@ app.post("/api/owner/broadcast", authenticateToken, async (req: AuthRequest, res
   }
 });
 
+// Global JSON error handler to guarantee all API failures return valid JSON instead of HTML
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("⚠️ [Global Error Handler]:", err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  res.status(err.status || 500).json({
+    error: err.message || "Internal Server Error"
+  });
+});
+
 // ====================================================================
 // SINGLE-PORT ROUTING (VITE/EXPRESS BRIDGE)
 // ====================================================================
 async function start() {
-  // Migrate schema for conversation names if needed
-  try {
-    await execute("ALTER TABLE conversations ADD COLUMN name_user1 TEXT");
-    await execute("ALTER TABLE conversations ADD COLUMN name_user2 TEXT");
-  } catch (e) {
-    // Ignore, likely already added
-  }
-
-  // Auto-verify rayane@gmail.com and rayane/rayanee usernames on startup
-  try {
-    await execute(`
-      UPDATE profiles 
-      SET is_verified = 1 
-      WHERE user_id IN (
-        SELECT id FROM users 
-        WHERE LOWER(email) = 'rayane@gmail.com' 
-           OR LOWER(username) = 'rayane' 
-           OR LOWER(username) = 'rayanee'
-      )
-    `);
-    console.log("[Startup] Auto-verified owner/admin profiles successfully.");
-  } catch (e) {
-    console.error("[Startup] Failed to auto-verify owner/admin profiles:", e);
-  }
-
   if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
@@ -3378,17 +3366,6 @@ async function start() {
     });
   }
 
-  // Global JSON error handler to guarantee all API failures return valid JSON instead of HTML
-  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    console.error("⚠️ [Global Error Handler]:", err);
-    if (res.headersSent) {
-      return next(err);
-    }
-    res.status(err.status || 500).json({
-      error: err.message || "Internal Server Error"
-    });
-  });
-
   if (!process.env.VERCEL) {
     server.listen(PORT, "0.0.0.0", () => {
       console.log(`===================================================`);
@@ -3399,7 +3376,9 @@ async function start() {
   }
 }
 
-start().catch(err => console.error("⚠️ [Startup] Boot error:", err));
+if (!process.env.VERCEL) {
+  start().catch(err => console.error("⚠️ [Startup] Boot error:", err));
+}
 
 export default app;
 
