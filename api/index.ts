@@ -1,4 +1,4 @@
-import app, { ensureDbReady } from "../server.ts";
+import app, { ensureDbReady } from "../server";
 
 export default async function handler(req: any, res: any) {
   try {

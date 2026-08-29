@@ -219,26 +219,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const response = await fetch(resolvedUrl, mergedOptions);
       
-      const contentType = response.headers.get("content-type") || "";
+      const rawText = await response.text();
       let data: any = null;
-      if (contentType.includes("application/json")) {
-        data = await response.json();
-      } else {
-        const text = await response.text();
-        if (response.status === 401) {
-          logout();
-          throw new Error("Session expired. Please log in again.");
-        }
-        throw new Error(`Server returned non-JSON response (${response.status})`);
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch (parseErr) {
+        // Raw text response
       }
-      
+
       if (!response.ok) {
         if (response.status === 401) {
           logout();
           throw new Error("Session expired. Please log in again.");
         }
-        throw new Error(data?.error || "An error occurred");
+        const errorMsg = data?.error || (rawText && rawText.length < 150 ? rawText : `Server error (${response.status})`);
+        throw new Error(errorMsg);
       }
+
+      if (data === null) {
+        throw new Error(`Unexpected server response (${response.status})`);
+      }
+
       return data;
     } catch (err: any) {
       if (err.message === "Session expired. Please log in again.") {

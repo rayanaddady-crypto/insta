@@ -8,8 +8,7 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { createClient } from "@libsql/client";
 import multer from "multer";
-import sharp from "sharp";
-import { handleGameSocket } from "./server_games.ts";
+import { handleGameSocket } from "./server_games";
 import { GoogleGenAI } from "@google/genai";
 
 // Initialize Gemini AI Client
@@ -593,7 +592,9 @@ const processAndSaveFile = async (file: Express.Multer.File): Promise<string> =>
     const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.webp`;
     const filepath = path.join(UPLOADS_DIR, filename);
     try {
-      await sharp(file.buffer)
+      const sharpModule: any = await import("sharp");
+      const sharpInstance = sharpModule.default || sharpModule;
+      await sharpInstance(file.buffer)
         .resize({ width: 1080, withoutEnlargement: true })
         .webp({ quality: 80 })
         .toFile(filepath);
@@ -703,7 +704,7 @@ app.post("/api/android/sync", async (req, res) => {
 });
 
 // Check username availability
-app.get("/api/check-username/:username", async (req, res) => {
+app.get(["/api/check-username/:username", "/check-username/:username"], async (req, res) => {
   try {
     const { username } = req.params;
     const normalized = (username || "").trim().toLowerCase().replace(/\s+/g, "_");
@@ -720,7 +721,7 @@ app.get("/api/check-username/:username", async (req, res) => {
 });
 
 // Register
-app.post("/api/register", async (req, res) => {
+app.post(["/api/register", "/register"], async (req, res) => {
   try {
     const { username, email, password } = req.body;
 
@@ -809,7 +810,7 @@ app.post("/api/register", async (req, res) => {
 });
 
 // Login
-app.post("/api/login", async (req, res) => {
+app.post(["/api/login", "/login"], async (req, res) => {
   try {
     const { usernameOrEmail, password } = req.body;
     console.log(`[Login Attempt] User: ${usernameOrEmail}`);
@@ -884,7 +885,7 @@ app.post("/api/login", async (req, res) => {
 });
 
 // SSO / Third Party Provider Login (Google, Apple, Facebook)
-app.post("/api/auth/sso", async (req, res) => {
+app.post(["/api/auth/sso", "/auth/sso"], async (req, res) => {
   try {
     const { provider } = req.body;
     const providerName = (provider || "Social").toString().toLowerCase().replace(/[^a-z0-9]/g, "");
