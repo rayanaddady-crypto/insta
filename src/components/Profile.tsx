@@ -45,10 +45,6 @@ export const Profile: React.FC<ProfileProps> = ({
 }) => {
   const { user, logout, fetchWithAuth, updateUser, triggerToast, theme } = useAuth();
   
-  const isEligibleForGif = user?.email?.toLowerCase() === "rayane@gmail.com" || 
-                           user?.username?.toLowerCase() === "rayane" || 
-                           user?.username?.toLowerCase() === "rayanee";
-  
   const [profile, setProfile] = useState<ProfileType | null>(null);
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [reels, setReels] = useState<ReelPost[]>([]);
@@ -288,15 +284,14 @@ export const Profile: React.FC<ProfileProps> = ({
     const file = e.target.files?.[0];
     if (file) {
       const isGif = file.type === "image/gif" || file.name?.toLowerCase().endsWith(".gif");
-      if (isGif && !isEligibleForGif) {
-        triggerToast("Animated GIF profiles are exclusive to Creator Rayan!", "error");
-        e.target.value = ""; // Reset file selection
-        return;
-      }
       setUploadFile(file);
+      setEditedAvatar(""); // Clear typed URL when file is selected
       const reader = new FileReader();
       reader.onload = () => {
         setPreviewSrc(reader.result as string);
+        if (isGif) {
+          triggerToast("Animated GIF selected! ✨", "info");
+        }
       };
       reader.readAsDataURL(file);
     }
@@ -386,21 +381,6 @@ export const Profile: React.FC<ProfileProps> = ({
     e.preventDefault();
     setIsUpdating(true);
     try {
-      // Security check: GIFs are exclusive to Rayan
-      const isGifUpload = uploadFile && (
-        uploadFile.type === "image/gif" || 
-        uploadFile.name?.toLowerCase().endsWith(".gif")
-      );
-
-      const isGifUrl = editedAvatar && (
-        editedAvatar.toLowerCase().includes(".gif") || 
-        editedAvatar.toLowerCase().includes("giphy")
-      );
-
-      if ((isGifUpload || isGifUrl) && !isEligibleForGif) {
-        throw new Error("Animated GIF profile pictures are exclusive to Platform Creator Rayan! Standard accounts are limited to JPEG/PNG portraits.");
-      }
-
       let finalAvatar = "";
       
       // If a file was selected from disk/gallery, upload directly to /api/upload to preserve animated GIFs and raw files
@@ -408,19 +388,12 @@ export const Profile: React.FC<ProfileProps> = ({
         try {
           const formData = new FormData();
           formData.append("file", uploadFile);
-          const token = localStorage.getItem("instaclone_token");
-          const uploadRes = await fetch("/api/upload", {
+          const uploadRes = await fetchWithAuth("/api/upload", {
             method: "POST",
-            headers: {
-              Authorization: `Bearer ${token}`
-            },
             body: formData
           });
-          if (uploadRes.ok) {
-            const uploadData = await uploadRes.json();
-            if (uploadData.url) {
-              finalAvatar = uploadData.url;
-            }
+          if (uploadRes && uploadRes.url) {
+            finalAvatar = uploadRes.url;
           }
         } catch (uploadErr) {
           console.error("Direct file upload error:", uploadErr);
@@ -450,7 +423,7 @@ export const Profile: React.FC<ProfileProps> = ({
       setIsEditOpen(false);
       setUploadFile(null);
       setPreviewSrc(null);
-      triggerToast("Luxe profile synchronized successfully!", "success");
+      triggerToast("Profile updated successfully!", "success");
       loadProfile();
     } catch (err: any) {
       triggerToast(err.message || "Failed to edit profile", "error");
@@ -1317,131 +1290,132 @@ export const Profile: React.FC<ProfileProps> = ({
                     <div className="border-2 border-dashed border-slate-200 dark:border-white/10 rounded-xl p-6 text-center bg-slate-50 dark:bg-black/20 hover:border-[#FF7A00]/40 transition-colors">
                       <input 
                         type="file" 
-                        accept="image/*"
+                        accept="image/*,.gif"
                         id="avatar-file-upload"
                         onChange={handleFileChange}
                         className="hidden" 
                       />
                       <label htmlFor="avatar-file-upload" className="flex flex-col items-center gap-2 cursor-pointer">
                         <Upload className="h-6 w-6 text-slate-400" />
-                        <span className="text-xs font-bold text-slate-600 dark:text-slate-300">Upload portrait from gallery</span>
-                        <span className="text-[9px] text-slate-400 uppercase">JPEG, PNG, WEBP up to 5MB</span>
+                        <span className="text-xs font-bold text-slate-600 dark:text-slate-300">Upload portrait or animated GIF from device</span>
+                        <span className="text-[9px] text-slate-400 uppercase">GIF, JPEG, PNG, WEBP up to 15MB</span>
                       </label>
                     </div>
                   )}
 
                   <input
                     type="url"
-                    placeholder="Or paste high-res image or animated GIF URL..."
+                    placeholder="Or paste image URL or animated GIF link..."
                     value={editedAvatar}
                     onChange={(e) => setEditedAvatar(e.target.value)}
                     className="w-full px-4 py-3 border border-slate-200 dark:border-white/10 rounded-xl text-xs bg-slate-50 dark:bg-[#121212] text-slate-900 dark:text-white focus:outline-hidden focus:border-[#FF7A00] transition-all font-semibold"
                   />
 
-                  {/* Animated Avatar Presets & Giphy search (Conditional for Rayan) */}
-                  {!isEligibleForGif ? (
-                    <div className="flex flex-col items-center justify-center p-5 border border-dashed border-amber-500/20 bg-amber-500/5 dark:bg-amber-500/2 rounded-xl text-center gap-2.5 my-2 shadow-xs">
-                      <Lock className="h-4 w-4 text-[#FF7A00]" />
-                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200">GIF Profile Picture Locked</span>
-                      <p className="text-[10px] text-slate-500 dark:text-slate-400 max-w-[280px]">
-                        Animated GIF profile pictures are exclusive to Platform Creator and Owner **Rayan**! Standard accounts can use static images.
-                      </p>
+                  {/* Animated Avatar Presets & Giphy search (Available for everyone) */}
+                  <div className="flex flex-col gap-3 pt-1">
+                    {/* Animated Avatar Presets */}
+                    <div className="flex flex-col gap-2">
+                      <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                        <Sparkles className="h-3 w-3 text-[#FF7A00]" />
+                        Featured Animated GIF Avatars
+                      </span>
+                      <div className="grid grid-cols-4 gap-2">
+                        {[
+                          { label: "Sasuke Anime", url: "https://media.giphy.com/media/26AHONQ79FdWZhAI0/giphy.gif" },
+                          { label: "Cyber Glitch", url: "https://media.giphy.com/media/xT9IgzoKnwFNmISR8I/giphy.gif" },
+                          { label: "Pixel Sunset", url: "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif" },
+                          { label: "Neon Aura", url: "https://media.giphy.com/media/l41lI4bYmcsPJX9Go/giphy.gif" }
+                        ].map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => {
+                              setUploadFile(null);
+                              setPreviewSrc(null);
+                              setEditedAvatar(preset.url);
+                              triggerToast(`${preset.label} GIF selected!`, "info");
+                            }}
+                            className={`flex flex-col items-center gap-1.5 p-2 rounded-xl border transition-all cursor-pointer ${
+                              editedAvatar === preset.url && !previewSrc
+                                ? "border-[#FF7A00] bg-[#FF7A00]/10 text-[#FF7A00]"
+                                : "border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-white/5 hover:border-slate-300 dark:hover:border-white/20 text-slate-600 dark:text-slate-400"
+                            }`}
+                          >
+                            <img 
+                              src={preset.url} 
+                              alt={preset.label} 
+                              referrerPolicy="no-referrer"
+                              className="w-9 h-9 rounded-full object-cover shadow-xs border border-white/20" 
+                            />
+                            <span className="text-[9px] font-bold truncate max-w-full">{preset.label}</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  ) : (
-                    <>
-                      {/* Animated Avatar Presets */}
-                      <div className="flex flex-col gap-2 pt-1">
-                        <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                          <Sparkles className="h-3 w-3 text-[#FF7A00]" />
-                          Featured Animated GIF Avatars
-                        </span>
-                        <div className="grid grid-cols-4 gap-2">
-                          {[
-                            { label: "Sasuke Anime", url: "https://media.giphy.com/media/26AHONQ79FdWZhAI0/giphy.gif" },
-                            { label: "Cyber Glitch", url: "https://media.giphy.com/media/xT9IgzoKnwFNmISR8I/giphy.gif" },
-                            { label: "Pixel Sunset", url: "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif" },
-                            { label: "Neon Aura", url: "https://media.giphy.com/media/l41lI4bYmcsPJX9Go/giphy.gif" }
-                          ].map((preset) => (
+
+                    {/* Giphy GIF Explorer */}
+                    <div className="flex flex-col gap-2 pt-2 border-t border-slate-100 dark:border-white/5">
+                      <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                        <Sparkles className="h-3 w-3 text-blue-500" />
+                        Search Animated GIFs on Giphy
+                      </span>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Search Giphy (e.g., anime, glitch, neon, cat)..."
+                          value={giphySearchQuery}
+                          onChange={(e) => setGiphySearchQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              handleGiphySearch(e);
+                            }
+                          }}
+                          className="flex-1 px-3 py-2 border border-slate-200 dark:border-white/10 rounded-lg text-xs bg-slate-50 dark:bg-[#121212] text-slate-900 dark:text-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleGiphySearch}
+                          className="px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white font-bold text-[10px] rounded-lg uppercase tracking-wider cursor-pointer transition-colors"
+                        >
+                          Search
+                        </button>
+                      </div>
+
+                      {giphyLoading ? (
+                        <div className="flex justify-center items-center py-4">
+                          <div className="animate-spin rounded-full h-4 w-4 border-2 border-t-transparent border-blue-500"></div>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-4 gap-1.5 max-h-28 overflow-y-auto pr-1">
+                          {giphyGifs.map((gif) => (
                             <button
-                              key={preset.label}
+                              key={gif.id}
                               type="button"
                               onClick={() => {
                                 setUploadFile(null);
                                 setPreviewSrc(null);
-                                setEditedAvatar(preset.url);
+                                setEditedAvatar(gif.url);
+                                triggerToast("Giphy GIF selected!", "success");
                               }}
-                              className={`flex flex-col items-center gap-1.5 p-2 rounded-xl border transition-all cursor-pointer ${
-                                editedAvatar === preset.url && !previewSrc
-                                  ? "border-[#FF7A00] bg-[#FF7A00]/10 text-[#FF7A00]"
-                                  : "border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-white/5 hover:border-slate-300 dark:hover:border-white/20 text-slate-600 dark:text-slate-400"
+                              className={`p-1 rounded-lg border transition-all cursor-pointer ${
+                                editedAvatar === gif.url && !previewSrc
+                                  ? "border-blue-500 bg-blue-500/10"
+                                  : "border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-white/5 hover:border-slate-300 dark:hover:border-white/20"
                               }`}
                             >
-                              <img src={preset.url} alt={preset.label} className="w-9 h-9 rounded-full object-cover shadow-xs border border-white/20" />
-                              <span className="text-[9px] font-bold truncate max-w-full">{preset.label}</span>
+                              <img 
+                                src={gif.url} 
+                                alt={gif.title} 
+                                referrerPolicy="no-referrer"
+                                className="w-10 h-10 rounded-md object-cover mx-auto" 
+                              />
                             </button>
                           ))}
                         </div>
-                      </div>
-
-                      {/* Giphy GIF Explorer */}
-                      <div className="flex flex-col gap-2 pt-2 border-t border-slate-100 dark:border-white/5">
-                        <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                          <Sparkles className="h-3 w-3 text-blue-500" />
-                          Search Animated GIFs on Giphy
-                        </span>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            placeholder="Search Giphy (e.g., anime, glitch, cat)..."
-                            value={giphySearchQuery}
-                            onChange={(e) => setGiphySearchQuery(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                handleGiphySearch(e);
-                              }
-                            }}
-                            className="flex-1 px-3 py-2 border border-slate-200 dark:border-white/10 rounded-lg text-xs bg-slate-50 dark:bg-[#121212] text-slate-900 dark:text-white"
-                          />
-                          <button
-                            type="button"
-                            onClick={handleGiphySearch}
-                            className="px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white font-bold text-[10px] rounded-lg uppercase tracking-wider cursor-pointer transition-colors"
-                          >
-                            Search
-                          </button>
-                        </div>
-
-                        {giphyLoading ? (
-                          <div className="flex justify-center items-center py-4">
-                            <div className="animate-spin rounded-full h-4 w-4 border-2 border-t-transparent border-blue-500"></div>
-                          </div>
-                        ) : (
-                          <div className="grid grid-cols-4 gap-1.5 max-h-28 overflow-y-auto pr-1">
-                            {giphyGifs.map((gif) => (
-                              <button
-                                key={gif.id}
-                                type="button"
-                                onClick={() => {
-                                  setUploadFile(null);
-                                  setPreviewSrc(null);
-                                  setEditedAvatar(gif.url);
-                                  triggerToast("Giphy GIF selected!", "success");
-                                }}
-                                className={`p-1 rounded-lg border transition-all cursor-pointer ${
-                                  editedAvatar === gif.url && !previewSrc
-                                    ? "border-blue-500 bg-blue-500/10"
-                                    : "border-slate-200 dark:border-white/5 bg-slate-50 dark:bg-white/5 hover:border-slate-300 dark:hover:border-white/20"
-                                }`}
-                              >
-                                <img src={gif.url} alt={gif.title} className="w-10 h-10 rounded-md object-cover mx-auto" />
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  )}
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 {/* Form fields in clean 2-column layout */}
