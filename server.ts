@@ -6,11 +6,10 @@ import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
-import { createServer as createViteServer } from "vite";
 import { createClient } from "@libsql/client";
 import multer from "multer";
 import sharp from "sharp";
-import { handleGameSocket } from "./server_games.js";
+import { handleGameSocket } from "./server_games.ts";
 import { GoogleGenAI } from "@google/genai";
 
 // Initialize Gemini AI Client
@@ -63,53 +62,100 @@ let turso = createClient({
   authToken: TURSO_TOKEN
 });
 
-// Wrapper query functions
-const query = async (sql: string, args: any[] = []): Promise<any[]> => {
-  const cleanArgs = args.map(arg => arg === undefined ? null : arg);
-  const result = await turso.execute({ sql, args: cleanArgs });
-  return result.rows as any[];
+let isLocalFallback = false;
+let dbInitPromise: Promise<void> | null = null;
+
+// Switch to local SQLite safely
+function fallbackToLocalDb() {
+  if (isLocalFallback) return;
+  isLocalFallback = true;
+  const localPath = isVercel ? "file:/tmp/local.db" : "file:local.db";
+  console.warn(`⚠️ [Turso DB] Switching client to local SQLite fallback (${localPath})...`);
+  turso = createClient({
+    url: localPath
+  });
+}
+
+// Low-level query functions (used by initialization to prevent circular deadlocks)
+const rawExecute = async (sql: string, args: any[] = []): Promise<any> => {
+  const cleanArgs = args.map(arg => (arg === undefined ? null : arg));
+  try {
+    return await turso.execute({ sql, args: cleanArgs });
+  } catch (err: any) {
+    if (!isLocalFallback && (TURSO_URL.startsWith("http") || TURSO_URL.startsWith("libsql"))) {
+      console.warn("⚠️ Remote Turso execute failed, falling back to local DB:", err.message);
+      fallbackToLocalDb();
+      return await turso.execute({ sql, args: cleanArgs });
+    }
+    throw err;
+  }
 };
 
-const queryOne = async (sql: string, args: any[] = []): Promise<any | null> => {
-  const rows = await query(sql, args);
+const rawQuery = async (sql: string, args: any[] = []): Promise<any[]> => {
+  const cleanArgs = args.map(arg => (arg === undefined ? null : arg));
+  try {
+    const result = await turso.execute({ sql, args: cleanArgs });
+    return result.rows as any[];
+  } catch (err: any) {
+    if (!isLocalFallback && (TURSO_URL.startsWith("http") || TURSO_URL.startsWith("libsql"))) {
+      console.warn("⚠️ Remote Turso query failed, falling back to local DB:", err.message);
+      fallbackToLocalDb();
+      const result = await turso.execute({ sql, args: cleanArgs });
+      return result.rows as any[];
+    }
+    throw err;
+  }
+};
+
+const rawQueryOne = async (sql: string, args: any[] = []): Promise<any | null> => {
+  const rows = await rawQuery(sql, args);
   return rows.length > 0 ? rows[0] : null;
 };
 
+// High-level query functions with auto-initialization & seamless fallback
+const query = async (sql: string, args: any[] = []): Promise<any[]> => {
+  await ensureDbReady();
+  return rawQuery(sql, args);
+};
+
+const queryOne = async (sql: string, args: any[] = []): Promise<any | null> => {
+  await ensureDbReady();
+  return rawQueryOne(sql, args);
+};
+
 const execute = async (sql: string, args: any[] = []): Promise<any> => {
-  const cleanArgs = args.map(arg => arg === undefined ? null : arg);
-  return await turso.execute({ sql, args: cleanArgs });
+  await ensureDbReady();
+  return rawExecute(sql, args);
 };
 
 // Check connection on boot and handle fallback
 async function checkDbConnection() {
   try {
     await turso.execute("SELECT 1");
-    console.log("⚡ [Turso DB] Remote database connected successfully.");
+    console.log("⚡ [Turso DB] Database connected successfully.");
   } catch (err) {
     console.warn("⚠️ [Turso DB] Remote connection bypassed, loading local SQLite file fallback:", err);
-    turso = createClient({
-      url: isVercel ? "file:/tmp/local.db" : "file:local.db"
-    });
+    fallbackToLocalDb();
   }
 }
 
 // Create separate tables for all required schemas
 async function ensureRaynaiUser() {
   try {
-    const existing = await queryOne("SELECT * FROM users WHERE username = 'raynai'");
+    const existing = await rawQueryOne("SELECT * FROM users WHERE username = 'raynai'");
     if (!existing) {
       const salt = bcrypt.genSaltSync(10);
       const hash = bcrypt.hashSync("raynai-grok-password-2026", salt);
-      const res = await execute(
+      const res = await rawExecute(
         "INSERT INTO users (username, email, password_hash) VALUES ('raynai', 'raynai@ai.local', ?)",
         [hash]
       );
       const userId = Number(res.lastInsertRowid);
-      await execute(
+      await rawExecute(
         "INSERT OR IGNORE INTO profiles (user_id, name, bio, avatar_url, is_verified) VALUES (?, 'Raynai AI', 'Professional AI Truth or Dare Game Master. Type @raynai saqsina to play!', 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=150&h=150&q=80', 1)",
         [userId]
       );
-      await execute(
+      await rawExecute(
         "INSERT OR IGNORE INTO user_settings (user_id, theme, privacy) VALUES (?, 'dark', 'public')",
         [userId]
       );
@@ -118,6 +164,18 @@ async function ensureRaynaiUser() {
   } catch (err) {
     console.error("⚠️ Failed to ensure @raynai user exists:", err);
   }
+}
+
+export async function ensureDbReady(): Promise<void> {
+  if (!dbInitPromise) {
+    dbInitPromise = initTursoTables().catch(err => {
+      console.error("⚠️ [Turso DB] Database init failed:", err);
+      // Reset so subsequent requests can attempt initialization if transient
+      dbInitPromise = null;
+      throw err;
+    });
+  }
+  return dbInitPromise;
 }
 
 async function initTursoTables() {
@@ -356,10 +414,10 @@ async function initTursoTables() {
     ];
 
     for (const sql of tables) {
-      await execute(sql);
+      await rawExecute(sql);
     }
     for (const sql of indexes) {
-      await execute(sql);
+      await rawExecute(sql);
     }
 
     // Ensure extended message columns for reply, edit, delete exist
@@ -372,7 +430,7 @@ async function initTursoTables() {
     ];
     for (const alterSql of messageAlterations) {
       try {
-        await execute(alterSql);
+        await rawExecute(alterSql);
       } catch (e) {
         // column already exists
       }
@@ -384,12 +442,16 @@ async function initTursoTables() {
     await ensureRaynaiUser();
 
     // Clean up and remove all legacy temp/mock accounts (emails ending in @raynista.co)
-    await execute("DELETE FROM users WHERE email LIKE '%@raynista.co'");
-    console.log("⚡ [Turso DB] Cleaned up all temporary mock accounts from the database.");
+    try {
+      await rawExecute("DELETE FROM users WHERE email LIKE '%@raynista.co'");
+      console.log("⚡ [Turso DB] Cleaned up all temporary mock accounts from the database.");
+    } catch (e) {
+      // ignore
+    }
 
     // Enforce blue-verification on boot for rayane / rayanee / rayane@gmail.com
     try {
-      await execute(
+      await rawExecute(
         `UPDATE profiles 
          SET is_verified = 1 
          WHERE user_id IN (
@@ -403,6 +465,7 @@ async function initTursoTables() {
     }
   } catch (err) {
     console.error("⚠️ [Turso DB] Table initialization failed:", err);
+    throw err;
   }
 }
 
@@ -496,7 +559,7 @@ async function seedTursoDb() {
 }
 
 // Call tables init
-initTursoTables();
+initTursoTables().catch(err => console.error("⚠️ [Turso DB] Boot error:", err));
 
 // ====================================================================
 // EXPRESS SERVER & REAL-TIME SOCKETS
@@ -512,6 +575,11 @@ app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+// Health check endpoints
+app.get(["/api/health", "/api", "/health"], (req, res) => {
+  res.json({ status: "ok", message: "Raymiii API is operational", time: new Date().toISOString() });
+});
+
 // Helper to save files, optimizing images with Sharp while preserving animated GIFs
 const processAndSaveFile = async (file: Express.Multer.File): Promise<string> => {
   const isGif = file.mimetype === "image/gif" || file.originalname.toLowerCase().endsWith(".gif");
@@ -524,10 +592,14 @@ const processAndSaveFile = async (file: Express.Multer.File): Promise<string> =>
   if (file.mimetype.startsWith("image/")) {
     const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.webp`;
     const filepath = path.join(UPLOADS_DIR, filename);
-    await sharp(file.buffer)
-      .resize({ width: 1080, withoutEnlargement: true })
-      .webp({ quality: 80 })
-      .toFile(filepath);
+    try {
+      await sharp(file.buffer)
+        .resize({ width: 1080, withoutEnlargement: true })
+        .webp({ quality: 80 })
+        .toFile(filepath);
+    } catch (sharpErr) {
+      fs.writeFileSync(filepath, file.buffer);
+    }
     return `/uploads/${filename}`;
   } else {
     const ext = path.extname(file.originalname) || ".mp4";
@@ -632,10 +704,19 @@ app.post("/api/android/sync", async (req, res) => {
 
 // Check username availability
 app.get("/api/check-username/:username", async (req, res) => {
-  const { username } = req.params;
-  const normalized = username.trim().toLowerCase().replace(/\s+/g, "_");
-  const row = await queryOne("SELECT id FROM users WHERE LOWER(username) = ?", [normalized]);
-  res.json({ available: !row && normalized.length >= 3 });
+  try {
+    const { username } = req.params;
+    const normalized = (username || "").trim().toLowerCase().replace(/\s+/g, "_");
+    if (!normalized || normalized.length < 3) {
+      res.json({ available: false });
+      return;
+    }
+    const row = await queryOne("SELECT id FROM users WHERE LOWER(username) = ?", [normalized]);
+    res.json({ available: !row });
+  } catch (err: any) {
+    console.error("Check username error:", err);
+    res.status(500).json({ error: "Failed to check username", available: false });
+  }
 });
 
 // Register
@@ -644,16 +725,33 @@ app.post("/api/register", async (req, res) => {
     const { username, email, password } = req.body;
 
     if (!username || !email || !password) {
-      res.status(400).json({ error: "Please fill in all fields" });
+      res.status(400).json({ error: "Please fill in all fields (username, email, and password)" });
       return;
     }
 
     const normalizedUsername = username.trim().toLowerCase().replace(/\s+/g, "_");
     const normalizedEmail = email.trim().toLowerCase();
 
-    const existing = await queryOne("SELECT id FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?", [normalizedUsername, normalizedEmail]);
+    if (normalizedUsername.length < 3) {
+      res.status(400).json({ error: "Username must be at least 3 characters" });
+      return;
+    }
+
+    if (password.length < 6) {
+      res.status(400).json({ error: "Password must be at least 6 characters" });
+      return;
+    }
+
+    const existing = await queryOne(
+      "SELECT id, username, email FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?", 
+      [normalizedUsername, normalizedEmail]
+    );
     if (existing) {
-      res.status(400).json({ error: "Username or email already exists" });
+      if (existing.username.toLowerCase() === normalizedUsername) {
+        res.status(400).json({ error: "This username is already taken" });
+        return;
+      }
+      res.status(400).json({ error: "An account with this email already exists" });
       return;
     }
 
@@ -670,17 +768,17 @@ app.post("/api/register", async (req, res) => {
     const avatar = `https://api.dicebear.com/7.x/adventurer/svg?seed=${normalizedUsername}`;
     const registerIsVerified = (normalizedEmail === "rayane@gmail.com" || normalizedUsername === "rayane" || normalizedUsername === "rayanee") ? 1 : 0;
     await execute(
-      "INSERT INTO profiles (user_id, name, bio, avatar_url, is_verified) VALUES (?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO profiles (user_id, name, bio, avatar_url, is_verified) VALUES (?, ?, ?, ?, ?)",
       [userId, normalizedUsername.toUpperCase(), "", avatar, registerIsVerified]
     );
 
     await execute(
-      "INSERT INTO user_settings (user_id, theme, privacy) VALUES (?, 'light', 'public')",
+      "INSERT OR IGNORE INTO user_settings (user_id, theme, privacy) VALUES (?, 'light', 'public')",
       [userId]
     );
 
     await execute(
-      "INSERT INTO online_status (user_id, is_online, last_seen) VALUES (?, 1, CURRENT_TIMESTAMP)",
+      "INSERT OR IGNORE INTO online_status (user_id, is_online, last_seen) VALUES (?, 1, CURRENT_TIMESTAMP)",
       [userId]
     );
 
@@ -696,14 +794,17 @@ app.post("/api/register", async (req, res) => {
         id: userId,
         username: normalizedUsername,
         email: normalizedEmail,
+        name: normalizedUsername.toUpperCase(),
         avatar_url: avatar,
         bio: "",
+        theme: "light",
+        privacy: "public",
         created_at: new Date().toISOString()
       }
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error("Register error:", err);
-    res.status(500).json({ error: "Failed to create account" });
+    res.status(500).json({ error: err.message || "Failed to create account" });
   }
 });
 
@@ -711,18 +812,21 @@ app.post("/api/register", async (req, res) => {
 app.post("/api/login", async (req, res) => {
   try {
     const { usernameOrEmail, password } = req.body;
-    console.log(`[Login Attempt] User: ${usernameOrEmail}, Password len: ${password?.length}`);
+    console.log(`[Login Attempt] User: ${usernameOrEmail}`);
 
     if (!usernameOrEmail || !password) {
-      res.status(400).json({ error: "Please provide credentials" });
+      res.status(400).json({ error: "Please enter your username/email and password" });
       return;
     }
 
     const identifier = usernameOrEmail.trim().toLowerCase();
-    const user = await queryOne("SELECT * FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?", [identifier, identifier]);
+    const user = await queryOne(
+      "SELECT * FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?", 
+      [identifier, identifier]
+    );
 
     if (!user) {
-      res.status(400).json({ error: "Invalid credentials. User does not exist." });
+      res.status(400).json({ error: "Invalid credentials. Account not found." });
       return;
     }
 
@@ -732,8 +836,21 @@ app.post("/api/login", async (req, res) => {
       return;
     }
 
-    const profile = await queryOne("SELECT * FROM profiles WHERE user_id = ?", [user.id]);
-    const settings = await queryOne("SELECT * FROM user_settings WHERE user_id = ?", [user.id]);
+    let profile = await queryOne("SELECT * FROM profiles WHERE user_id = ?", [user.id]);
+    if (!profile) {
+      const avatar = `https://api.dicebear.com/7.x/adventurer/svg?seed=${user.username}`;
+      await execute(
+        "INSERT OR IGNORE INTO profiles (user_id, name, bio, avatar_url, is_verified) VALUES (?, ?, '', ?, 0)",
+        [user.id, user.username.toUpperCase(), avatar]
+      );
+      profile = await queryOne("SELECT * FROM profiles WHERE user_id = ?", [user.id]);
+    }
+
+    let settings = await queryOne("SELECT * FROM user_settings WHERE user_id = ?", [user.id]);
+    if (!settings) {
+      await execute("INSERT OR IGNORE INTO user_settings (user_id, theme, privacy) VALUES (?, 'light', 'public')", [user.id]);
+      settings = await queryOne("SELECT * FROM user_settings WHERE user_id = ?", [user.id]);
+    }
 
     await execute(
       "INSERT INTO online_status (user_id, is_online, last_seen) VALUES (?, 1, CURRENT_TIMESTAMP) ON CONFLICT(user_id) DO UPDATE SET is_online=1, last_seen=CURRENT_TIMESTAMP",
@@ -752,16 +869,17 @@ app.post("/api/login", async (req, res) => {
         id: user.id,
         username: user.username,
         email: user.email,
-        avatar_url: profile?.avatar_url || "",
+        name: profile?.name || user.username,
+        avatar_url: profile?.avatar_url || `https://api.dicebear.com/7.x/adventurer/svg?seed=${user.username}`,
         bio: profile?.bio || "",
         theme: settings?.theme || "light",
         privacy: settings?.privacy || "public",
         created_at: user.created_at
       }
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error("Login error:", err);
-    res.status(500).json({ error: "Failed to sign in" });
+    res.status(500).json({ error: err.message || "Failed to sign in" });
   }
 });
 
@@ -782,10 +900,10 @@ app.post("/api/auth/sso", async (req, res) => {
       );
       const userId = Number(insertResult.lastInsertRowid);
       await execute(
-        "INSERT INTO profiles (user_id, full_name, avatar_url, bio) VALUES (?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO profiles (user_id, name, avatar_url, bio) VALUES (?, ?, ?, ?)",
         [userId, `${provider || "Social"} User`, `https://api.dicebear.com/7.x/adventurer/svg?seed=${ssoUsername}`, `Signed in via ${provider || "Social"}`]
       );
-      await execute("INSERT INTO user_settings (user_id) VALUES (?)", [userId]);
+      await execute("INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", [userId]);
       user = await queryOne("SELECT * FROM users WHERE id = ?", [userId]);
     }
 
@@ -814,16 +932,17 @@ app.post("/api/auth/sso", async (req, res) => {
         id: user.id,
         username: user.username,
         email: user.email,
-        avatar_url: profile?.avatar_url || "",
+        name: profile?.name || `${provider || "Social"} User`,
+        avatar_url: profile?.avatar_url || `https://api.dicebear.com/7.x/adventurer/svg?seed=${user.username}`,
         bio: profile?.bio || "",
         theme: settings?.theme || "light",
         privacy: settings?.privacy || "public",
         created_at: user.created_at
       }
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error("SSO error:", err);
-    res.status(500).json({ error: "Failed to complete SSO authentication" });
+    res.status(500).json({ error: err.message || "Failed to complete SSO authentication" });
   }
 });
 
@@ -3225,13 +3344,14 @@ async function start() {
     console.error("[Startup] Failed to auto-verify owner/admin profiles:", e);
   }
 
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa"
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
@@ -3239,15 +3359,28 @@ async function start() {
     });
   }
 
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`===================================================`);
-    console.log(`🔥 Premium Raynista server running on port ${PORT}`);
-    console.log(`🖥️ Frontend SPA + Backend SQLite + Sockets is Live!`);
-    console.log(`===================================================`);
+  // Global JSON error handler to guarantee all API failures return valid JSON instead of HTML
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("⚠️ [Global Error Handler]:", err);
+    if (res.headersSent) {
+      return next(err);
+    }
+    res.status(err.status || 500).json({
+      error: err.message || "Internal Server Error"
+    });
   });
+
+  if (!process.env.VERCEL) {
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log(`===================================================`);
+      console.log(`🔥 Premium Raynista server running on port ${PORT}`);
+      console.log(`🖥️ Frontend SPA + Backend SQLite + Sockets is Live!`);
+      console.log(`===================================================`);
+    });
+  }
 }
 
-start();
+start().catch(err => console.error("⚠️ [Startup] Boot error:", err));
 
 export default app;
 
