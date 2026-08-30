@@ -80,13 +80,20 @@ function fallbackToLocalDb() {
   });
 }
 
+// A SQLITE_* code means the remote database answered and rejected the statement,
+// so the connection is healthy and falling back would silently strand real data.
+const shouldFallback = (err: any): boolean =>
+  !isLocalFallback &&
+  (TURSO_URL.startsWith("http") || TURSO_URL.startsWith("libsql")) &&
+  !String(err?.code ?? "").startsWith("SQLITE_");
+
 // Low-level query functions (used by initialization to prevent circular deadlocks)
 const rawExecute = async (sql: string, args: any[] = []): Promise<any> => {
   const cleanArgs = args.map(arg => (arg === undefined ? null : arg));
   try {
     return await turso.execute({ sql, args: cleanArgs });
   } catch (err: any) {
-    if (!isLocalFallback && (TURSO_URL.startsWith("http") || TURSO_URL.startsWith("libsql"))) {
+    if (shouldFallback(err)) {
       console.warn("⚠️ Remote Turso execute failed, falling back to local DB:", err.message);
       fallbackToLocalDb();
       return await turso.execute({ sql, args: cleanArgs });
@@ -101,7 +108,7 @@ const rawQuery = async (sql: string, args: any[] = []): Promise<any[]> => {
     const result = await turso.execute({ sql, args: cleanArgs });
     return result.rows as any[];
   } catch (err: any) {
-    if (!isLocalFallback && (TURSO_URL.startsWith("http") || TURSO_URL.startsWith("libsql"))) {
+    if (shouldFallback(err)) {
       console.warn("⚠️ Remote Turso query failed, falling back to local DB:", err.message);
       fallbackToLocalDb();
       const result = await turso.execute({ sql, args: cleanArgs });
