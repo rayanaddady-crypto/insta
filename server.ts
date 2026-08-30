@@ -80,13 +80,20 @@ function fallbackToLocalDb() {
   });
 }
 
+const isRemoteUrl = TURSO_URL.startsWith("http") || TURSO_URL.startsWith("libsql");
+
+// A SQLITE_* code means the remote database answered and rejected the statement,
+// so the connection is healthy and falling back would silently strand real data.
+const shouldFallback = (err: any): boolean =>
+  !isLocalFallback && isRemoteUrl && !String(err?.code ?? "").startsWith("SQLITE_");
+
 // Low-level query functions (used by initialization to prevent circular deadlocks)
 const rawExecute = async (sql: string, args: any[] = []): Promise<any> => {
   const cleanArgs = args.map(arg => (arg === undefined ? null : arg));
   try {
     return await turso.execute({ sql, args: cleanArgs });
   } catch (err: any) {
-    if (!isLocalFallback && (TURSO_URL.startsWith("http") || TURSO_URL.startsWith("libsql"))) {
+    if (shouldFallback(err)) {
       console.warn("⚠️ Remote Turso execute failed, falling back to local DB:", err.message);
       fallbackToLocalDb();
       return await turso.execute({ sql, args: cleanArgs });
@@ -101,7 +108,7 @@ const rawQuery = async (sql: string, args: any[] = []): Promise<any[]> => {
     const result = await turso.execute({ sql, args: cleanArgs });
     return result.rows as any[];
   } catch (err: any) {
-    if (!isLocalFallback && (TURSO_URL.startsWith("http") || TURSO_URL.startsWith("libsql"))) {
+    if (shouldFallback(err)) {
       console.warn("⚠️ Remote Turso query failed, falling back to local DB:", err.message);
       fallbackToLocalDb();
       const result = await turso.execute({ sql, args: cleanArgs });
@@ -141,6 +148,10 @@ async function checkDbConnection() {
     await Promise.race([turso.execute("SELECT 1"), timeoutPromise]);
     console.log("⚡ [Turso DB] Database connected successfully.");
   } catch (err) {
+    if (isRemoteUrl) {
+      console.warn("⚠️ [Turso DB] Remote connection check failed or timed out; keeping the configured remote database:", err);
+      return;
+    }
     console.warn("⚠️ [Turso DB] Remote connection bypassed or timed out, loading local SQLite file fallback:", err);
     fallbackToLocalDb();
   }
