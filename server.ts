@@ -42,10 +42,15 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/")) {
+    if (
+      file.mimetype.startsWith("image/") || 
+      file.mimetype.startsWith("video/") || 
+      file.mimetype.startsWith("audio/") ||
+      file.originalname.match(/\.(mp3|wav|ogg|m4a|aac|flac|webm)$/i)
+    ) {
       cb(null, true);
     } else {
-      cb(new Error("Only images and videos are allowed") as any, false);
+      cb(new Error("Only images, videos, and audio files are allowed") as any, false);
     }
   },
 });
@@ -130,10 +135,13 @@ const execute = async (sql: string, args: any[] = []): Promise<any> => {
 // Check connection on boot and handle fallback
 async function checkDbConnection() {
   try {
-    await turso.execute("SELECT 1");
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error("Connection timeout")), 2000)
+    );
+    await Promise.race([turso.execute("SELECT 1"), timeoutPromise]);
     console.log("⚡ [Turso DB] Database connected successfully.");
   } catch (err) {
-    console.warn("⚠️ [Turso DB] Remote connection bypassed, loading local SQLite file fallback:", err);
+    console.warn("⚠️ [Turso DB] Remote connection bypassed or timed out, loading local SQLite file fallback:", err);
     fallbackToLocalDb();
   }
 }
@@ -370,6 +378,12 @@ async function initTursoTables() {
         FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
         FOREIGN KEY (reel_id) REFERENCES reels(id) ON DELETE CASCADE
       );`,
+      `CREATE TABLE IF NOT EXISTS media_files (
+        filename TEXT PRIMARY KEY,
+        mime_type TEXT,
+        data_base64 TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );`,
       `CREATE TABLE IF NOT EXISTS truth_or_dare_games (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation_id INTEGER NOT NULL UNIQUE,
@@ -387,8 +401,34 @@ async function initTursoTables() {
         text TEXT NOT NULL,
         mood_emoji TEXT DEFAULT '💭',
         music_track TEXT DEFAULT '',
+        music_title TEXT DEFAULT '',
+        music_artist TEXT DEFAULT '',
+        music_url TEXT DEFAULT '',
+        music_cover TEXT DEFAULT '',
         expires_at TEXT NOT NULL,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );`,
+      `CREATE TABLE IF NOT EXISTS music_tracks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        artist TEXT NOT NULL,
+        cover_url TEXT DEFAULT '',
+        audio_url TEXT NOT NULL,
+        duration INTEGER DEFAULT 30,
+        genre TEXT DEFAULT 'Pop',
+        is_trending INTEGER DEFAULT 0,
+        uploaded_by INTEGER DEFAULT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+      );`,
+      `CREATE TABLE IF NOT EXISTS note_likes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        note_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(note_id, user_id),
+        FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       );`
     ];
@@ -411,7 +451,12 @@ async function initTursoTables() {
       `CREATE INDEX IF NOT EXISTS idx_notifications_receiver_id ON notifications(receiver_id);`,
       `CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);`,
       `CREATE INDEX IF NOT EXISTS idx_blocked_users_blocker_id ON blocked_users(blocker_id);`,
-      `CREATE INDEX IF NOT EXISTS idx_notes_user_id ON notes(user_id);`
+      `CREATE INDEX IF NOT EXISTS idx_notes_user_id ON notes(user_id);`,
+      `CREATE INDEX IF NOT EXISTS idx_note_likes_note_id ON note_likes(note_id);`,
+      `CREATE INDEX IF NOT EXISTS idx_note_likes_user_id ON note_likes(user_id);`,
+      `CREATE INDEX IF NOT EXISTS idx_music_tracks_title ON music_tracks(title);`,
+      `CREATE INDEX IF NOT EXISTS idx_music_tracks_artist ON music_tracks(artist);`,
+      `CREATE INDEX IF NOT EXISTS idx_music_tracks_genre ON music_tracks(genre);`
     ];
 
     for (const sql of tables) {
@@ -429,7 +474,13 @@ async function initTursoTables() {
       "ALTER TABLE messages ADD COLUMN is_edited INTEGER DEFAULT 0",
       "ALTER TABLE messages ADD COLUMN is_deleted INTEGER DEFAULT 0",
       "ALTER TABLE conversations ADD COLUMN name_user1 TEXT",
-      "ALTER TABLE conversations ADD COLUMN name_user2 TEXT"
+      "ALTER TABLE conversations ADD COLUMN name_user2 TEXT",
+      "ALTER TABLE notes ADD COLUMN music_title TEXT DEFAULT ''",
+      "ALTER TABLE notes ADD COLUMN music_artist TEXT DEFAULT ''",
+      "ALTER TABLE notes ADD COLUMN music_url TEXT DEFAULT ''",
+      "ALTER TABLE notes ADD COLUMN music_cover TEXT DEFAULT ''",
+      "ALTER TABLE notes ADD COLUMN music_start_time INTEGER DEFAULT 0",
+      "ALTER TABLE notes ADD COLUMN audience TEXT DEFAULT 'followers'"
     ];
     for (const alterSql of messageAlterations) {
       try {
@@ -443,6 +494,9 @@ async function initTursoTables() {
 
     // Ensure programmatic AI User @raynai exists
     await ensureRaynaiUser();
+
+    // Ensure rich Instagram music library catalog exists
+    await ensureMusicLibrary();
 
     // Clean up and remove all legacy temp/mock accounts (emails ending in @raynista.co)
     try {
@@ -469,6 +523,179 @@ async function initTursoTables() {
   } catch (err) {
     console.error("⚠️ [Turso DB] Table initialization failed:", err);
     throw err;
+  }
+}
+
+// Seed rich curated Instagram Music Library with preview tracks
+async function ensureMusicLibrary() {
+  try {
+    const curatedTracks = [
+      // --- ElGrandeToto Top Hits ---
+      {
+        title: "Love Nwantiti (feat. ElGrandeToto) [North African Remix]",
+        artist: "CKay & ElGrandeToto",
+        genre: "Hip Hop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+        duration: 30
+      },
+      {
+        title: "Mghayer",
+        artist: "ElGrandeToto",
+        genre: "Hip Hop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+        duration: 30
+      },
+      {
+        title: "Salade Coco",
+        artist: "ElGrandeToto",
+        genre: "Hip Hop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+        duration: 30
+      },
+      {
+        title: "Gueule Tapée",
+        artist: "ElGrandeToto",
+        genre: "Hip Hop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
+        duration: 30
+      },
+      {
+        title: "Silhouette",
+        artist: "ElGrandeToto",
+        genre: "Hip Hop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
+        duration: 30
+      },
+      {
+        title: "Dellali (feat. Hamza)",
+        artist: "ElGrandeToto",
+        genre: "Hip Hop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1518609878373-06d740f60d8b?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
+        duration: 30
+      },
+      // --- Morad Top Hits ---
+      {
+        title: "Pelele",
+        artist: "Morad",
+        genre: "Hip Hop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3",
+        duration: 30
+      },
+      {
+        title: "Motorola",
+        artist: "Morad",
+        genre: "Hip Hop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
+        duration: 30
+      },
+      {
+        title: "Sigue",
+        artist: "Morad & Beny Jr",
+        genre: "Hip Hop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
+        duration: 30
+      },
+      // --- Dizzy DROS ---
+      {
+        title: "M3a L3echrane",
+        artist: "Dizzy DROS",
+        genre: "Hip Hop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1501386761578-eac5c94b800a?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-10.mp3",
+        duration: 30
+      },
+      // --- Global Pop & Viral Hits ---
+      {
+        title: "Espresso",
+        artist: "Sabrina Carpenter",
+        genre: "Pop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+        duration: 30
+      },
+      {
+        title: "Starboy",
+        artist: "The Weeknd",
+        genre: "Synthwave",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+        duration: 30
+      },
+      {
+        title: "Birds of a Feather",
+        artist: "Billie Eilish",
+        genre: "Pop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
+        duration: 30
+      },
+      {
+        title: "FE!N (Night Vibe)",
+        artist: "Travis Scott ft. Playboi Carti",
+        genre: "Hip Hop",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3",
+        duration: 30
+      },
+      {
+        title: "Casablanca Sunset Beats",
+        artist: "Raymi Beats",
+        genre: "Lofi",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1518609878373-06d740f60d8b?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+        duration: 30
+      },
+      {
+        title: "Montagem Diamante",
+        artist: "Phonk Master",
+        genre: "Phonk",
+        is_trending: 1,
+        cover_url: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=300&h=300&q=80",
+        audio_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
+        duration: 30
+      }
+    ];
+
+    for (const t of curatedTracks) {
+      const exists = await rawQueryOne(
+        "SELECT id FROM music_tracks WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?)",
+        [t.title, t.artist]
+      );
+      if (!exists) {
+        await rawExecute(
+          `INSERT INTO music_tracks (title, artist, genre, is_trending, cover_url, audio_url, duration)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [t.title, t.artist, t.genre, t.is_trending, t.cover_url, t.audio_url, t.duration]
+        );
+      }
+    }
+    console.log("⚡ [Turso DB] Verified and seeded curated Instagram music catalog.");
+  } catch (err) {
+    console.warn("⚠️ Failed to seed music library:", err);
   }
 }
 
@@ -575,14 +802,8 @@ app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// Guarantee DB is initialized on incoming requests
-app.use(async (req, res, next) => {
-  // Normalize rewrites from Vercel if needed
-  if (req.url && !req.url.startsWith("/api") && !req.url.startsWith("/uploads") && !req.url.startsWith("/socket.io") && !req.url.startsWith("/assets")) {
-    if (req.url.startsWith("/login") || req.url.startsWith("/register") || req.url.startsWith("/auth") || req.url.startsWith("/check-username") || req.url.startsWith("/health")) {
-      req.url = "/api" + (req.url.startsWith("/") ? req.url : "/" + req.url);
-    }
-  }
+// Guarantee DB is initialized on incoming API requests
+app.use("/api", async (req, res, next) => {
   try {
     await ensureDbReady();
     next();
@@ -599,36 +820,98 @@ app.get(["/api/health", "/api", "/health"], (req, res) => {
   res.json({ status: "ok", message: "Raymiii API is operational", time: new Date().toISOString() });
 });
 
+// Database-backed resilient static media serving endpoint
+app.get(["/uploads/:filename", "/api/uploads/:filename"], async (req, res) => {
+  const filename = req.params.filename;
+  if (!filename) {
+    res.status(400).send("Bad request: filename missing");
+    return;
+  }
+
+  const filepath = path.join(UPLOADS_DIR, filename);
+  if (fs.existsSync(filepath)) {
+    return res.sendFile(filepath);
+  }
+
+  try {
+    const row: any = await queryOne("SELECT mime_type, data_base64 FROM media_files WHERE filename = ?", [filename]);
+    if (row && row.data_base64) {
+      const buffer = Buffer.from(row.data_base64, "base64");
+      try {
+        if (!fs.existsSync(UPLOADS_DIR)) {
+          fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+        }
+        fs.writeFileSync(filepath, buffer);
+      } catch (writeErr) {
+        // Disk write cache failed, still serve from memory buffer
+      }
+      res.setHeader("Content-Type", row.mime_type || "image/jpeg");
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      return res.end(buffer);
+    }
+  } catch (dbErr) {
+    console.error("Error retrieving media file from database:", dbErr);
+  }
+
+  return res.status(404).send("File not found");
+});
+
 // Helper to save files, optimizing images with Sharp while preserving animated GIFs
 const processAndSaveFile = async (file: Express.Multer.File): Promise<string> => {
+  let filename = "";
+  let mimeType = "";
+  let finalBuffer: Buffer = file.buffer;
+
   const isGif = file.mimetype === "image/gif" || file.originalname.toLowerCase().endsWith(".gif");
   if (isGif) {
-    const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.gif`;
-    const filepath = path.join(UPLOADS_DIR, filename);
-    fs.writeFileSync(filepath, file.buffer);
-    return `/uploads/${filename}`;
-  }
-  if (file.mimetype.startsWith("image/")) {
-    const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.webp`;
-    const filepath = path.join(UPLOADS_DIR, filename);
+    filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.gif`;
+    mimeType = "image/gif";
+    finalBuffer = file.buffer;
+  } else if (file.mimetype.startsWith("image/")) {
+    filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.webp`;
+    mimeType = "image/webp";
     try {
       const sharpModule: any = await import("sharp");
       const sharpInstance = sharpModule.default || sharpModule;
-      await sharpInstance(file.buffer)
+      finalBuffer = await sharpInstance(file.buffer)
         .resize({ width: 1080, withoutEnlargement: true })
-        .webp({ quality: 80 })
-        .toFile(filepath);
+        .webp({ quality: 85 })
+        .toBuffer();
     } catch (sharpErr) {
-      fs.writeFileSync(filepath, file.buffer);
+      finalBuffer = file.buffer;
+      mimeType = file.mimetype || "image/jpeg";
+      filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.jpg`;
     }
-    return `/uploads/${filename}`;
   } else {
     const ext = path.extname(file.originalname) || ".mp4";
-    const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
-    const filepath = path.join(UPLOADS_DIR, filename);
-    fs.writeFileSync(filepath, file.buffer);
-    return `/uploads/${filename}`;
+    filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+    mimeType = file.mimetype || "video/mp4";
+    finalBuffer = file.buffer;
   }
+
+  // 1. Cache to local disk if directory is writable
+  try {
+    if (!fs.existsSync(UPLOADS_DIR)) {
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    }
+    const filepath = path.join(UPLOADS_DIR, filename);
+    fs.writeFileSync(filepath, finalBuffer);
+  } catch (fsErr) {
+    console.warn("Could not write file to local disk (stateless runtime):", fsErr);
+  }
+
+  // 2. Persist base64 data to SQLite/Turso database so files survive serverless invocations and reboots
+  try {
+    const base64Data = finalBuffer.toString("base64");
+    await execute(
+      "INSERT OR REPLACE INTO media_files (filename, mime_type, data_base64) VALUES (?, ?, ?)",
+      [filename, mimeType, base64Data]
+    );
+  } catch (dbErr) {
+    console.error("Failed to persist media file in media_files table:", dbErr);
+  }
+
+  return `/uploads/${filename}`;
 };
 
 // ====================================================================
@@ -670,6 +953,92 @@ const calculateAge = (birthdayStr: string | null | undefined) => {
   }
   return `${age} years old`;
 };
+
+// ====================================================================
+// GIF SEARCH & TRENDING PROXY (CORS-Safe & Resilient)
+// ====================================================================
+const CURATED_GIFS = [
+  { id: "gif_sasuke", title: "Sasuke Anime Aura", tags: ["anime", "naruto", "sasuke", "cool", "glow"], url: "https://media.giphy.com/media/26AHONQ79FdWZhAI0/giphy.gif" },
+  { id: "gif_glitch", title: "Cyber Glitch Art", tags: ["cyber", "glitch", "neon", "hacker", "future"], url: "https://media.giphy.com/media/xT9IgzoKnwFNmISR8I/giphy.gif" },
+  { id: "gif_sunset", title: "Pixel Sunset Drive", tags: ["pixel", "sunset", "retro", "vibes", "aesthetic"], url: "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif" },
+  { id: "gif_neon", title: "Neon Cyber Aura", tags: ["neon", "aura", "glow", "cyberpunk", "colors"], url: "https://media.giphy.com/media/l41lI4bYmcsPJX9Go/giphy.gif" },
+  { id: "gif_cat", title: "Lofi Chill Cat", tags: ["cat", "cute", "chill", "lofi", "animal"], url: "https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif" },
+  { id: "gif_goku", title: "Super Saiyan Aura", tags: ["anime", "goku", "dragonball", "power", "glow"], url: "https://media.giphy.com/media/cb9aF9tzoRjgQ/giphy.gif" },
+  { id: "gif_matrix", title: "Matrix Green Stream", tags: ["matrix", "code", "cyber", "hacker", "green"], url: "https://media.giphy.com/media/A06UFEx8jxEwU/giphy.gif" },
+  { id: "gif_synth", title: "Synthwave Horizon", tags: ["synthwave", "retrowave", "neon", "aesthetic", "car"], url: "https://media.giphy.com/media/3oKIPnAiaMCws8nOsE/giphy.gif" },
+  { id: "gif_party", title: "Vibe Dance", tags: ["dance", "party", "vibe", "music", "hype"], url: "https://media.giphy.com/media/blSTtZehjAZ8I/giphy.gif" },
+  { id: "gif_space", title: "Cosmic Galaxy Nebula", tags: ["space", "cosmic", "galaxy", "stars", "nebula"], url: "https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif" },
+  { id: "gif_gaming", title: "8-bit Level Up", tags: ["gaming", "pixel", "game", "arcade", "retro"], url: "https://media.giphy.com/media/l0HlBO7eyXzSZkJri/giphy.gif" },
+  { id: "gif_heart", title: "Pixel Heart Sparkle", tags: ["love", "heart", "cute", "sparkle", "pixel"], url: "https://media.giphy.com/media/26BRv0ThflsHCqDrG/giphy.gif" }
+];
+
+app.get(["/api/gifs/trending", "/api/giphy/trending"], async (req, res) => {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const response = await fetch("https://api.giphy.com/v1/gifs/trending?api_key=dc6zaTOxFJmzC&limit=16", {
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+
+    if (response.ok) {
+      const data: any = await response.json();
+      const gifs = (data.data || []).map((g: any) => ({
+        id: g.id || `gif_${Math.random()}`,
+        title: g.title || "Animated GIF",
+        url: g.images?.fixed_height?.url || g.images?.original?.url || g.images?.downsized?.url
+      })).filter((g: any) => Boolean(g.url));
+
+      if (gifs.length > 0) {
+        return res.json({ success: true, gifs });
+      }
+    }
+  } catch (err) {
+    // Network or Giphy error, gracefully fallback
+  }
+
+  return res.json({ success: true, gifs: CURATED_GIFS });
+});
+
+app.get(["/api/gifs/search", "/api/giphy/search"], async (req, res) => {
+  const query = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  if (!query) {
+    return res.json({ success: true, gifs: CURATED_GIFS });
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const response = await fetch(`https://api.giphy.com/v1/gifs/search?api_key=dc6zaTOxFJmzC&q=${encodeURIComponent(query)}&limit=16`, {
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+
+    if (response.ok) {
+      const data: any = await response.json();
+      const gifs = (data.data || []).map((g: any) => ({
+        id: g.id || `gif_${Math.random()}`,
+        title: g.title || "Animated GIF",
+        url: g.images?.fixed_height?.url || g.images?.original?.url || g.images?.downsized?.url
+      })).filter((g: any) => Boolean(g.url));
+
+      if (gifs.length > 0) {
+        return res.json({ success: true, gifs });
+      }
+    }
+  } catch (err) {
+    // Fallback below
+  }
+
+  // Filter curated GIFs by query tokens
+  const lower = query.toLowerCase();
+  const filtered = CURATED_GIFS.filter(g => 
+    g.title.toLowerCase().includes(lower) || 
+    g.tags.some(t => t.toLowerCase().includes(lower) || lower.includes(t.toLowerCase()))
+  );
+
+  return res.json({ success: true, gifs: filtered.length > 0 ? filtered : CURATED_GIFS });
+});
 
 // ====================================================================
 // AUTHENTICATION API ROUTES
@@ -1369,8 +1738,344 @@ app.get("/api/stories", authenticateToken, async (req: AuthRequest, res) => {
 });
 
 // ====================================================================
-// INSTAGRAM NOTES API ROUTES
+// INSTAGRAM MUSIC & NOTES API ROUTES
 // ====================================================================
+
+// Helper to query real online music catalog (Apple Music / iTunes API with multi-region and artist matching)
+async function fetchOnlineMusic(term: string, limit = 40): Promise<any[]> {
+  try {
+    const rawTerm = term.trim();
+    if (!rawTerm) return [];
+
+    const unspacedTerm = rawTerm.replace(/[\s\-_.,'/]+/g, "");
+    const searchTerms = Array.from(new Set([rawTerm, unspacedTerm])).filter(Boolean);
+
+    // Query key music storefronts in parallel for full North African, European & Global coverage
+    const countryCodes = ["MA", "FR", "US", "ES", "GB"];
+    const fetchPromises: Promise<any>[] = [];
+
+    for (const q of searchTerms) {
+      for (const cc of countryCodes) {
+        const url = `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&country=${cc}&media=music&entity=song&limit=${Math.min(limit, 30)}`;
+        fetchPromises.push(
+          (async () => {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 4000);
+            try {
+              const res = await fetch(url, {
+                signal: controller.signal,
+                headers: {
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                  "Accept": "application/json"
+                }
+              });
+              clearTimeout(timeoutId);
+              if (!res.ok) return [];
+              const data: any = await res.json();
+              return Array.isArray(data?.results) ? data.results : [];
+            } catch {
+              clearTimeout(timeoutId);
+              return [];
+            }
+          })()
+        );
+      }
+    }
+
+    const settledResults = await Promise.allSettled(fetchPromises);
+    const combinedRawTracks: any[] = [];
+    for (const result of settledResults) {
+      if (result.status === "fulfilled" && Array.isArray(result.value)) {
+        combinedRawTracks.push(...result.value);
+      }
+    }
+
+    const seenTrackIds = new Set<string>();
+    const seenSignatures = new Set<string>();
+    const formattedTracks: any[] = [];
+
+    for (const item of combinedRawTracks) {
+      if (!item || !item.previewUrl || (!item.trackName && !item.trackCensoredName)) continue;
+      const trackId = String(item.trackId || "");
+      const title = String(item.trackName || item.trackCensoredName || "Unknown Song").trim();
+      const artist = String(item.artistName || "Unknown Artist").trim();
+      const signature = `${title.toLowerCase()}_${artist.toLowerCase()}`;
+
+      if (trackId && seenTrackIds.has(trackId)) continue;
+      if (seenSignatures.has(signature)) continue;
+
+      if (trackId) seenTrackIds.add(trackId);
+      seenSignatures.add(signature);
+
+      const cover = item.artworkUrl100
+        ? item.artworkUrl100.replace("100x100bb", "400x400bb")
+        : (item.artworkUrl60 || "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=300&h=300&q=80");
+
+      formattedTracks.push({
+        id: `online_${item.trackId || Math.random().toString(36).substring(2, 9)}`,
+        title,
+        artist,
+        album: item.collectionName || "",
+        genre: item.primaryGenreName || "Music",
+        is_trending: 0,
+        cover_url: cover,
+        audio_url: item.previewUrl,
+        duration: item.trackTimeMillis ? Math.round(item.trackTimeMillis / 1000) : 30,
+        is_online: true,
+        source: "Apple Music"
+      });
+    }
+
+    return formattedTracks;
+  } catch (err) {
+    console.warn("Online music search fetch error:", err);
+    return [];
+  }
+}
+
+// Helper function to rank and score track relevance (ensuring searched musicians like "ElGrandeToto" or "Morad" appear at the very 1st place!)
+function scoreMusicMatch(track: any, searchStr: string): number {
+  if (!searchStr) return 0;
+  const rawQ = searchStr.toLowerCase().trim();
+  const cleanQ = rawQ.replace(/[\s\-_.,'/()]+/g, "");
+  const title = (track.title || "").toLowerCase().trim();
+  const artist = (track.artist || "").toLowerCase().trim();
+  const cleanTitle = title.replace(/[\s\-_.,'/()]+/g, "");
+  const cleanArtist = artist.replace(/[\s\-_.,'/()]+/g, "");
+
+  let score = 0;
+
+  // 1. EXACT / DOMINANT ARTIST MATCH (Highest Ranking Priority)
+  if (cleanArtist === cleanQ || artist === rawQ) {
+    score += 25000;
+  } else if (cleanArtist.startsWith(cleanQ) || artist.startsWith(rawQ)) {
+    score += 20000;
+  } else if (cleanQ.startsWith(cleanArtist) || rawQ.startsWith(artist)) {
+    score += 18000;
+  } else if (cleanArtist.includes(cleanQ) || artist.includes(rawQ)) {
+    score += 15000;
+  }
+
+  // Tokenized Artist Match (e.g. searching "elgrande toto" matches "ElGrandeToto", "Toto", etc.)
+  const qTokens = rawQ.split(/[\s\-_.,'/()]+/).filter(Boolean);
+  const artistTokens = artist.split(/[\s\-_.,'/()]+/).filter(Boolean);
+  const titleTokens = title.split(/[\s\-_.,'/()]+/).filter(Boolean);
+
+  if (qTokens.length > 0) {
+    const matchedArtistTokens = qTokens.filter((token: string) =>
+      artistTokens.some((at: string) => at.includes(token) || token.includes(at)) ||
+      cleanArtist.includes(token)
+    );
+    if (matchedArtistTokens.length === qTokens.length) {
+      score += 12000;
+    } else if (matchedArtistTokens.length > 0) {
+      score += 6000 * (matchedArtistTokens.length / qTokens.length);
+    }
+  }
+
+  // 2. EXACT / PREFIX TITLE MATCH
+  if (cleanTitle === cleanQ || title === rawQ) {
+    score += 10000;
+  } else if (cleanTitle.startsWith(cleanQ) || title.startsWith(rawQ)) {
+    score += 8000;
+  } else if (cleanTitle.includes(cleanQ) || title.includes(rawQ)) {
+    score += 5000;
+  }
+
+  if (qTokens.length > 0) {
+    const matchedTitleTokens = qTokens.filter((token: string) =>
+      titleTokens.some((tt: string) => tt.includes(token) || token.includes(tt)) ||
+      cleanTitle.includes(token)
+    );
+    if (matchedTitleTokens.length === qTokens.length) {
+      score += 7000;
+    } else if (matchedTitleTokens.length > 0) {
+      score += 3500 * (matchedTitleTokens.length / qTokens.length);
+    }
+  }
+
+  // Word boundary boosts (e.g. "mo" matches "Morad", "Montagem", "Modern")
+  if (artistTokens.some((w: string) => w.startsWith(rawQ))) score += 4000;
+  if (titleTokens.some((w: string) => w.startsWith(rawQ))) score += 3000;
+
+  if (track.is_trending) score += 100;
+  return score;
+}
+
+// 1. GET ALL MUSIC / SEARCH / FILTER (LOCAL + ONLINE SEARCH WITH PREFIX RANKING)
+app.get(["/api/music", "/api/music/tracks"], authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const currentUserId = req.user?.id;
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : (typeof req.query.q === "string" ? req.query.q.trim() : "");
+    const genre = typeof req.query.genre === "string" ? req.query.genre.trim() : "";
+    const isTrending = req.query.trending === "1" || req.query.trending === "true";
+    const myUploadsOnly = req.query.my_uploads === "1" || req.query.my_uploads === "true";
+
+    // 1. If only requested user's own uploads
+    if (myUploadsOnly && currentUserId) {
+      const myTracks = await query(
+        "SELECT * FROM music_tracks WHERE uploaded_by = ? ORDER BY id DESC LIMIT 50",
+        [currentUserId]
+      );
+      res.json({ success: true, tracks: myTracks });
+      return;
+    }
+
+    // 2. Fetch local DB tracks
+    let sql = "SELECT * FROM music_tracks WHERE 1=1";
+    const params: any[] = [];
+
+    if (genre && genre.toLowerCase() !== "all" && genre.toLowerCase() !== "trending") {
+      sql += " AND LOWER(genre) = LOWER(?)";
+      params.push(genre);
+    }
+
+    if (isTrending || genre.toLowerCase() === "trending") {
+      sql += " AND is_trending = 1";
+    }
+
+    if (search) {
+      sql += " AND (LOWER(title) LIKE ? OR LOWER(artist) LIKE ? OR LOWER(genre) LIKE ?)";
+      const pattern = `%${search.toLowerCase()}%`;
+      params.push(pattern, pattern, pattern);
+    }
+
+    sql += " ORDER BY is_trending DESC, id DESC LIMIT 50";
+    const localTracks = await query(sql, params);
+
+    // 3. Online Search Engine (iTunes / Apple Music Global Catalog)
+    let onlineTracks: any[] = [];
+
+    if (search) {
+      // User is actively searching for any song or artist
+      onlineTracks = await fetchOnlineMusic(search, 40);
+    } else if (genre && genre.toLowerCase() !== "all") {
+      // Genre specific discovery
+      const genreSearchTerms: { [k: string]: string } = {
+        "trending": "Top Hits 2026 Global",
+        "pop": "Top Pop Hits",
+        "hip hop": "Hip Hop Rap Hits",
+        "lofi": "Lofi Chill Beats",
+        "phonk": "Phonk Drift",
+        "electronic": "Electronic Dance EDM",
+        "acoustic": "Acoustic Hits",
+        "arabic": "Moroccan Arabic Hits",
+        "rock": "Rock Hits",
+        "r&b": "R&B Soul Hits",
+        "latin": "Latin Reggaeton Hits"
+      };
+      const term = genreSearchTerms[genre.toLowerCase()] || `${genre} hits`;
+      onlineTracks = await fetchOnlineMusic(term, 25);
+    } else if (isTrending || genre.toLowerCase() === "trending") {
+      onlineTracks = await fetchOnlineMusic("Top Billboard Hits", 25);
+    }
+
+    // 4. Merge Local and Online Tracks seamlessly with deduplication
+    const seenSignatures = new Set<string>();
+    const mergedTracks: any[] = [];
+
+    // Prioritize local database results (e.g. user custom uploads or curated library)
+    for (const t of localTracks) {
+      const sig = `${(t.title || "").toLowerCase().trim()}_${(t.artist || "").toLowerCase().trim()}`;
+      if (!seenSignatures.has(sig)) {
+        seenSignatures.add(sig);
+        mergedTracks.push(t);
+      }
+    }
+
+    // Append rich online search results
+    for (const t of onlineTracks) {
+      const sig = `${(t.title || "").toLowerCase().trim()}_${(t.artist || "").toLowerCase().trim()}`;
+      if (!seenSignatures.has(sig)) {
+        seenSignatures.add(sig);
+        mergedTracks.push(t);
+      }
+    }
+
+    // If searching, sort results by match relevance score (items starting with search query rank first)
+    if (search) {
+      mergedTracks.sort((a, b) => scoreMusicMatch(b, search) - scoreMusicMatch(a, search));
+    }
+
+    res.json({ success: true, tracks: mergedTracks, total: mergedTracks.length });
+  } catch (err) {
+    console.error("Failed to load music:", err);
+    res.status(500).json({ error: "Failed to load music" });
+  }
+});
+
+// 2. UPLOAD CUSTOM MUSIC TRACK
+app.post(
+  "/api/music/upload",
+  authenticateToken,
+  upload.fields([
+    { name: "audio", maxCount: 1 },
+    { name: "cover", maxCount: 1 }
+  ]),
+  async (req: AuthRequest, res) => {
+    try {
+      const currentUserId = req.user!.id;
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+      const audioFile = files?.audio?.[0];
+      const coverFile = files?.cover?.[0];
+
+      const { title, artist, genre, cover_url } = req.body;
+
+      if (!audioFile) {
+        res.status(400).json({ error: "Audio file is required" });
+        return;
+      }
+
+      if (!title || typeof title !== "string" || !title.trim()) {
+        res.status(400).json({ error: "Track title is required" });
+        return;
+      }
+
+      const audioUrl = await processAndSaveFile(audioFile);
+      let finalCoverUrl = "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=300&h=300&q=80";
+
+      if (coverFile) {
+        finalCoverUrl = await processAndSaveFile(coverFile);
+      } else if (cover_url && typeof cover_url === "string" && cover_url.trim()) {
+        finalCoverUrl = cover_url.trim();
+      }
+
+      const trackTitle = title.trim().slice(0, 60);
+      const trackArtist = (artist && typeof artist === "string" && artist.trim()) 
+        ? artist.trim().slice(0, 50) 
+        : req.user!.username;
+      const trackGenre = (genre && typeof genre === "string" && genre.trim()) 
+        ? genre.trim().slice(0, 30) 
+        : "Custom";
+
+      const insertRes = await execute(
+        `INSERT INTO music_tracks (title, artist, genre, is_trending, cover_url, audio_url, duration, uploaded_by)
+         VALUES (?, ?, ?, 0, ?, ?, 30, ?)`,
+        [trackTitle, trackArtist, trackGenre, finalCoverUrl, audioUrl, currentUserId]
+      );
+
+      const newTrack = {
+        id: Number(insertRes.lastInsertRowid),
+        title: trackTitle,
+        artist: trackArtist,
+        genre: trackGenre,
+        is_trending: 0,
+        cover_url: finalCoverUrl,
+        audio_url: audioUrl,
+        duration: 30,
+        uploaded_by: currentUserId,
+        created_at: new Date().toISOString()
+      };
+
+      res.json({ success: true, track: newTrack });
+    } catch (err: any) {
+      console.error("Music upload error:", err);
+      res.status(500).json({ error: err.message || "Failed to upload music" });
+    }
+  }
+);
+
+// 3. GET INSTAGRAM NOTES
 app.get("/api/notes", authenticateToken, async (req: AuthRequest, res) => {
   try {
     const currentUserId = req.user!.id;
@@ -1379,16 +2084,18 @@ app.get("/api/notes", authenticateToken, async (req: AuthRequest, res) => {
     // Clean up expired notes
     await execute("DELETE FROM notes WHERE expires_at < ?", [now]);
 
-    // Fetch active notes with user details
+    // Fetch active notes with user details and likes count
     const rows = await query(
-      `SELECT n.id, n.user_id, n.text, n.mood_emoji, n.music_track, n.created_at, n.expires_at,
-              u.username, pr.avatar_url
+      `SELECT n.id, n.user_id, n.text, n.mood_emoji, n.music_track, n.music_title, n.music_artist, n.music_url, n.music_cover, n.music_start_time, n.audience, n.created_at, n.expires_at,
+              u.username, pr.avatar_url,
+              (SELECT COUNT(*) FROM note_likes WHERE note_id = n.id) AS likes_count,
+              (SELECT COUNT(*) FROM note_likes WHERE note_id = n.id AND user_id = ?) AS is_liked
        FROM notes n
        JOIN users u ON n.user_id = u.id
        LEFT JOIN profiles pr ON u.id = pr.user_id
        WHERE n.expires_at > ?
        ORDER BY n.created_at DESC`,
-      [now]
+      [currentUserId, now]
     );
 
     // Format notes and identify current user's note
@@ -1396,6 +2103,10 @@ app.get("/api/notes", authenticateToken, async (req: AuthRequest, res) => {
     const otherNotes: any[] = [];
 
     for (const r of rows) {
+      const musicTitle = r.music_title || "";
+      const musicArtist = r.music_artist || "";
+      const musicTrack = r.music_track || (musicTitle ? `${musicTitle} · ${musicArtist || "Artist"}` : "");
+
       const noteItem = {
         id: r.id,
         user_id: r.user_id,
@@ -1403,9 +2114,17 @@ app.get("/api/notes", authenticateToken, async (req: AuthRequest, res) => {
         avatar_url: r.avatar_url || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=150&h=150&q=80",
         text: r.text,
         mood_emoji: r.mood_emoji || "💭",
-        music_track: r.music_track || "",
+        music_track: musicTrack,
+        music_title: musicTitle,
+        music_artist: musicArtist,
+        music_url: r.music_url || "",
+        music_cover: r.music_cover || "",
+        music_start_time: Number(r.music_start_time) || 0,
+        audience: r.audience || "followers",
         created_at: r.created_at,
-        is_self: r.user_id === currentUserId
+        is_self: r.user_id === currentUserId,
+        likes_count: Number(r.likes_count) || 0,
+        is_liked: Boolean(r.is_liked)
       };
 
       if (r.user_id === currentUserId) {
@@ -1426,9 +2145,17 @@ app.get("/api/notes", authenticateToken, async (req: AuthRequest, res) => {
         avatar_url: raynaiProfile?.avatar_url || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=150&h=150&q=80",
         text: "M3akoum Raynai AI ⚡ Kteb lia f Direct!",
         mood_emoji: "✨",
-        music_track: "Moroccan Lofi Vibes 🎧",
+        music_track: "Casablanca Sunset Beats · Raymi Beats",
+        music_title: "Casablanca Sunset Beats",
+        music_artist: "Raymi Beats",
+        music_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+        music_cover: "https://images.unsplash.com/photo-1518609878373-06d740f60d8b?auto=format&fit=crop&w=300&h=300&q=80",
+        music_start_time: 0,
+        audience: "followers",
         created_at: new Date().toISOString(),
-        is_self: false
+        is_self: false,
+        likes_count: 5,
+        is_liked: false
       };
       otherNotes.unshift(raynaiNote);
     }
@@ -1443,10 +2170,11 @@ app.get("/api/notes", authenticateToken, async (req: AuthRequest, res) => {
   }
 });
 
+// 4. CREATE / UPDATE INSTAGRAM NOTE
 app.post("/api/notes", authenticateToken, async (req: AuthRequest, res) => {
   try {
     const currentUserId = req.user!.id;
-    const { text, mood_emoji, music_track } = req.body;
+    const { text, mood_emoji, music_track, music_title, music_artist, music_url, music_cover, music_start_time, audience } = req.body;
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       res.status(400).json({ error: "Note text is required" });
@@ -1455,7 +2183,17 @@ app.post("/api/notes", authenticateToken, async (req: AuthRequest, res) => {
 
     const trimmedText = text.trim().slice(0, 60); // 60 chars Instagram standard
     const emoji = (mood_emoji && typeof mood_emoji === "string") ? mood_emoji.trim() : "💭";
-    const music = (music_track && typeof music_track === "string") ? music_track.trim().slice(0, 50) : "";
+    const mTitle = (music_title && typeof music_title === "string") ? music_title.trim().slice(0, 60) : "";
+    const mArtist = (music_artist && typeof music_artist === "string") ? music_artist.trim().slice(0, 50) : "";
+    const mUrl = (music_url && typeof music_url === "string") ? music_url.trim() : "";
+    const mCover = (music_cover && typeof music_cover === "string") ? music_cover.trim() : "";
+    const mStartTime = typeof music_start_time === "number" ? Math.max(0, Math.floor(music_start_time)) : 0;
+    const mAudience = (audience === "close_friends") ? "close_friends" : "followers";
+    
+    let mTrack = (music_track && typeof music_track === "string") ? music_track.trim().slice(0, 80) : "";
+    if (!mTrack && mTitle) {
+      mTrack = mArtist ? `${mTitle} · ${mArtist}` : mTitle;
+    }
 
     // 24 hours expiry
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -1468,16 +2206,16 @@ app.post("/api/notes", authenticateToken, async (req: AuthRequest, res) => {
     if (existing) {
       await execute(
         `UPDATE notes 
-         SET text = ?, mood_emoji = ?, music_track = ?, expires_at = ?, created_at = ?
+         SET text = ?, mood_emoji = ?, music_track = ?, music_title = ?, music_artist = ?, music_url = ?, music_cover = ?, music_start_time = ?, audience = ?, expires_at = ?, created_at = ?
          WHERE user_id = ?`,
-        [trimmedText, emoji, music, expiresAt, now, currentUserId]
+        [trimmedText, emoji, mTrack, mTitle, mArtist, mUrl, mCover, mStartTime, mAudience, expiresAt, now, currentUserId]
       );
       noteId = existing.id;
     } else {
       const insertRes = await execute(
-        `INSERT INTO notes (user_id, text, mood_emoji, music_track, expires_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [currentUserId, trimmedText, emoji, music, expiresAt, now]
+        `INSERT INTO notes (user_id, text, mood_emoji, music_track, music_title, music_artist, music_url, music_cover, music_start_time, audience, expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [currentUserId, trimmedText, emoji, mTrack, mTitle, mArtist, mUrl, mCover, mStartTime, mAudience, expiresAt, now]
       );
       noteId = Number(insertRes.lastInsertRowid);
     }
@@ -1497,18 +2235,109 @@ app.post("/api/notes", authenticateToken, async (req: AuthRequest, res) => {
       avatar_url: userProfile?.avatar_url || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=150&h=150&q=80",
       text: trimmedText,
       mood_emoji: emoji,
-      music_track: music,
+      music_track: mTrack,
+      music_title: mTitle,
+      music_artist: mArtist,
+      music_url: mUrl,
+      music_cover: mCover,
+      music_start_time: mStartTime,
+      audience: mAudience,
       created_at: now,
-      is_self: true
+      is_self: true,
+      likes_count: 0,
+      is_liked: false
     };
 
     // Broadcast update via Socket.io
     io.emit("note_updated", newNote);
 
+    // Automatically cache online soundtrack in local library if not exists
+    if (mTitle && mUrl) {
+      try {
+        const existingTrack = await queryOne("SELECT id FROM music_tracks WHERE audio_url = ? OR (LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?))", [mUrl, mTitle, mArtist]);
+        if (!existingTrack) {
+          await execute(
+            `INSERT INTO music_tracks (title, artist, genre, is_trending, cover_url, audio_url, duration, uploaded_by)
+             VALUES (?, ?, ?, 0, ?, ?, 30, ?)`,
+            [mTitle, mArtist || "Artist", "Popular", mCover || "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=300&h=300&q=80", mUrl, currentUserId]
+          );
+        }
+      } catch (trackCacheErr) {
+        // Non-blocking
+      }
+    }
+
     res.json({ success: true, note: newNote });
   } catch (err) {
     console.error("Failed to post note:", err);
     res.status(500).json({ error: "Failed to share note" });
+  }
+});
+
+// 5. TOGGLE LIKE ON A NOTE
+app.post("/api/notes/:id/like", authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const currentUserId = req.user!.id;
+    const noteId = parseInt(req.params.id);
+
+    if (isNaN(noteId)) {
+      res.status(400).json({ error: "Invalid note id" });
+      return;
+    }
+
+    const note = await queryOne("SELECT * FROM notes WHERE id = ?", [noteId]);
+    if (!note && noteId !== 999999) {
+      res.status(404).json({ error: "Note not found or expired" });
+      return;
+    }
+
+    const existingLike = await queryOne("SELECT id FROM note_likes WHERE note_id = ? AND user_id = ?", [noteId, currentUserId]);
+    let isLiked = false;
+
+    if (existingLike) {
+      await execute("DELETE FROM note_likes WHERE id = ?", [existingLike.id]);
+      isLiked = false;
+    } else {
+      await execute("INSERT INTO note_likes (note_id, user_id) VALUES (?, ?)", [noteId, currentUserId]);
+      isLiked = true;
+
+      // Send notification to note owner if not self
+      if (note && note.user_id !== currentUserId) {
+        const sender = await queryOne("SELECT u.username, pr.avatar_url FROM users u LEFT JOIN profiles pr ON u.id = pr.user_id WHERE u.id = ?", [currentUserId]);
+        const notifMsg = `${sender?.username || "Someone"} liked your note: "${note.text.slice(0, 30)}"`;
+        const notifRes = await execute(
+          `INSERT INTO notifications (type, sender_id, receiver_id, text) VALUES ('like', ?, ?, ?)`,
+          [currentUserId, note.user_id, notifMsg]
+        );
+
+        io.to(`user_${note.user_id}`).emit("new_notification", {
+          id: Number(notifRes.lastInsertRowid),
+          type: "like",
+          sender_id: currentUserId,
+          sender_username: sender?.username || req.user!.username,
+          sender_avatar: sender?.avatar_url || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=150&h=150&q=80",
+          text: notifMsg,
+          created_at: new Date().toISOString(),
+          is_read: false
+        });
+      }
+    }
+
+    const countRes = await queryOne("SELECT COUNT(*) AS c FROM note_likes WHERE note_id = ?", [noteId]);
+    const likesCount = Number(countRes?.c) || (isLiked ? 1 : 0);
+
+    // Broadcast socket event
+    io.emit("note_liked", {
+      note_id: noteId,
+      user_id: currentUserId,
+      is_liked: isLiked,
+      likes_count: likesCount
+    });
+
+    res.json({ success: true, is_liked: isLiked, likes_count: likesCount });
+  } catch (err) {
+    console.error("Failed to toggle note like:", err);
+    res.status(500).json({ error: "Failed to like note" });
   }
 });
 
@@ -2061,6 +2890,14 @@ app.put("/api/profile", authenticateToken, async (req: AuthRequest, res) => {
     const currentUserId = req.user!.id;
     const { name, bio, avatar_url, website, gender, location, birthday, is_private } = req.body;
 
+    const safeAvatarUrl = typeof avatar_url === "string" && avatar_url.trim() ? avatar_url.trim() : null;
+    const safeName = typeof name === "string" && name.trim() ? name.trim() : null;
+    const safeBio = typeof bio === "string" ? bio : null;
+    const safeWebsite = typeof website === "string" ? website : null;
+    const safeGender = typeof gender === "string" ? gender : null;
+    const safeLocation = typeof location === "string" ? location : null;
+    const safeBirthday = typeof birthday === "string" ? birthday : null;
+
     // Edit profiles row
     await execute(
       `UPDATE profiles
@@ -2068,7 +2905,7 @@ app.put("/api/profile", authenticateToken, async (req: AuthRequest, res) => {
            website=COALESCE(?, website), gender=COALESCE(?, gender), location=COALESCE(?, location),
            birthday=COALESCE(?, birthday)
        WHERE user_id = ?`,
-      [name, bio, avatar_url, website, gender, location, birthday, currentUserId]
+      [safeName, safeBio, safeAvatarUrl, safeWebsite, safeGender, safeLocation, safeBirthday, currentUserId]
     );
 
     if (typeof is_private === "boolean") {

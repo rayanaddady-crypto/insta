@@ -23,6 +23,7 @@ export interface Profile {
   age?: string | null;
   is_verified?: boolean;
   is_muted?: boolean;
+  is_private?: boolean | number;
   last_seen?: string;
   followers_count: number;
   following_count: number;
@@ -75,6 +76,11 @@ export interface ReelPost {
     avatar_url: string;
     is_following: boolean;
   };
+  co_creator?: {
+    id: number;
+    username: string;
+    avatar_url: string;
+  } | null;
   likes_count: number;
   comments_count: number;
   is_liked: boolean;
@@ -123,6 +129,21 @@ export interface ChatUser {
   } | null;
 }
 
+export interface MusicTrack {
+  id: number | string;
+  title: string;
+  artist: string;
+  cover_url: string;
+  audio_url: string;
+  duration?: number;
+  genre?: string;
+  is_trending?: boolean | number;
+  uploaded_by?: number;
+  created_at?: string;
+  is_online?: boolean;
+  source?: string;
+}
+
 export interface InstagramNote {
   id: number;
   user_id: number;
@@ -131,6 +152,15 @@ export interface InstagramNote {
   text: string;
   mood_emoji: string;
   music_track?: string;
+  music_title?: string;
+  music_artist?: string;
+  music_url?: string;
+  music_cover?: string;
+  music_start_time?: number;
+  audience?: "followers" | "close_friends";
   created_at: string;
   is_self?: boolean;
+  likes_count?: number;
+  is_liked?: boolean;
 }
+

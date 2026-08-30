@@ -322,7 +322,11 @@ const ReelItem: React.FC<ReelItemProps> = ({
 // ====================================================================
 // MAIN REELS PAGE MODULE
 // ====================================================================
-export const Reels: React.FC = () => {
+interface ReelsProps {
+  onSelectUserProfile?: (username: string) => void;
+}
+
+export const Reels: React.FC<ReelsProps> = ({ onSelectUserProfile }) => {
   const { fetchWithAuth, triggerToast } = useAuth();
   const [reels, setReels] = useState<ReelPost[]>([]);
   const [loading, setLoading] = useState(true);
@@ -569,6 +573,7 @@ export const Reels: React.FC = () => {
                 onFollowToggle={handleFollowToggle}
                 onOpenComments={handleOpenComments}
                 triggerToast={triggerToast}
+                onSelectUserProfile={onSelectUserProfile}
               />
             </div>
           ))}

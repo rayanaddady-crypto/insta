@@ -200,43 +200,37 @@ export const Profile: React.FC<ProfileProps> = ({
   const fetchTrendingGifs = async () => {
     setGiphyLoading(true);
     try {
-      const res = await fetch(`https://api.giphy.com/v1/gifs/trending?api_key=dc6zaTOxFJmzC&limit=12`);
-      if (res.ok) {
-        const data = await res.json();
-        const gifs = data.data?.map((g: any) => ({
-          id: g.id,
-          title: g.title,
-          url: g.images?.fixed_height?.url || g.images?.original?.url
-        })) || [];
-        setGiphyGifs(gifs);
+      const res = await fetchWithAuth("/api/gifs/trending");
+      if (res && res.gifs) {
+        setGiphyGifs(res.gifs);
       }
     } catch (err) {
-      console.error("Giphy trending error:", err);
+      // Fallback curated defaults if any error occurs
+      setGiphyGifs([
+        { id: "gif_sasuke", title: "Sasuke Anime Aura", url: "https://media.giphy.com/media/26AHONQ79FdWZhAI0/giphy.gif" },
+        { id: "gif_glitch", title: "Cyber Glitch Art", url: "https://media.giphy.com/media/xT9IgzoKnwFNmISR8I/giphy.gif" },
+        { id: "gif_sunset", title: "Pixel Sunset Drive", url: "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif" },
+        { id: "gif_neon", title: "Neon Cyber Aura", url: "https://media.giphy.com/media/l41lI4bYmcsPJX9Go/giphy.gif" }
+      ]);
     } finally {
       setGiphyLoading(false);
     }
   };
 
-  const handleGiphySearch = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleGiphySearch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!giphySearchQuery.trim()) {
       fetchTrendingGifs();
       return;
     }
     setGiphyLoading(true);
     try {
-      const res = await fetch(`https://api.giphy.com/v1/gifs/search?api_key=dc6zaTOxFJmzC&q=${encodeURIComponent(giphySearchQuery.trim())}&limit=12`);
-      if (res.ok) {
-        const data = await res.json();
-        const gifs = data.data?.map((g: any) => ({
-          id: g.id,
-          title: g.title,
-          url: g.images?.fixed_height?.url || g.images?.original?.url
-        })) || [];
-        setGiphyGifs(gifs);
+      const res = await fetchWithAuth(`/api/gifs/search?q=${encodeURIComponent(giphySearchQuery.trim())}`);
+      if (res && res.gifs) {
+        setGiphyGifs(res.gifs);
       }
     } catch (err) {
-      console.error("Giphy search error:", err);
+      // Fallback
     } finally {
       setGiphyLoading(false);
     }
@@ -381,7 +375,7 @@ export const Profile: React.FC<ProfileProps> = ({
     e.preventDefault();
     setIsUpdating(true);
     try {
-      let finalAvatar = "";
+      let finalAvatar = editedAvatar || profile?.avatar_url || "";
       
       // If a file was selected from disk/gallery, upload directly to /api/upload to preserve animated GIFs and raw files
       if (uploadFile) {
@@ -397,11 +391,9 @@ export const Profile: React.FC<ProfileProps> = ({
           }
         } catch (uploadErr) {
           console.error("Direct file upload error:", uploadErr);
+          finalAvatar = await cropAndCompressImage();
         }
-      }
-
-      // Fallback to cropAndCompressImage or editedAvatar URL
-      if (!finalAvatar) {
+      } else if (previewSrc) {
         finalAvatar = await cropAndCompressImage();
       }
 
@@ -419,7 +411,15 @@ export const Profile: React.FC<ProfileProps> = ({
         })
       });
 
-      updateUser(response.user);
+      if (response && response.user) {
+        updateUser(response.user);
+        setProfile((prev) => prev ? {
+          ...prev,
+          name: response.user.name || editedName,
+          bio: response.user.bio || editedBio,
+          avatar_url: response.user.avatar_url || finalAvatar || prev.avatar_url
+        } : null);
+      }
       setIsEditOpen(false);
       setUploadFile(null);
       setPreviewSrc(null);
@@ -553,52 +553,53 @@ export const Profile: React.FC<ProfileProps> = ({
           )}
 
           {/* COVER HEADER & PROFILE INFORMATION SECTION */}
-          <div id="cover-section" className="relative mb-6 rounded-2xl overflow-hidden border border-slate-200 dark:border-white/5 shadow-md dark:shadow-2xl bg-white dark:bg-[#0A0A0A]">
+          <div id="cover-section" className="relative mb-5 sm:mb-6 rounded-2xl overflow-hidden border border-slate-200 dark:border-white/5 shadow-md dark:shadow-2xl bg-white dark:bg-[#0A0A0A]">
             
             {/* Cover Banner */}
-            <div className="h-44 w-full bg-linear-to-r from-slate-200 via-slate-100 to-slate-200 dark:from-neutral-900 dark:via-stone-950 dark:to-neutral-900 flex items-center justify-between px-8 relative overflow-hidden select-none">
+            <div className="h-32 sm:h-44 w-full bg-linear-to-r from-slate-200 via-slate-100 to-slate-200 dark:from-neutral-900 dark:via-stone-950 dark:to-neutral-900 flex items-center justify-between px-4 sm:px-8 relative overflow-hidden select-none">
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_bottom_right,_var(--tw-gradient-stops))] from-[#FF7A00]/5 via-transparent to-transparent opacity-60" />
-              <div className="absolute bottom-4 right-4 flex items-center gap-2">
-                <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest bg-white/60 dark:bg-black/40 px-3 py-1.5 rounded-full border border-slate-200 dark:border-white/5 backdrop-blur-md">
-                  Raynista Club Lounge
+              <div className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 flex items-center gap-2">
+                <span className="text-[8px] sm:text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest bg-white/60 dark:bg-black/40 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full border border-slate-200 dark:border-white/5 backdrop-blur-md">
+                  Raymi Club Lounge
                 </span>
               </div>
             </div>
 
             {/* Profile Meta Card Layout */}
-            <div className="bg-white/95 dark:bg-[#0A0A0A]/40 backdrop-blur-2xl p-6 md:p-8 flex flex-col md:flex-row gap-6 md:gap-12 items-center md:items-start relative -mt-8 mx-4 rounded-xl border border-slate-200 dark:border-white/5 shadow-lg">
+            <div className="bg-white/95 dark:bg-[#0A0A0A]/40 backdrop-blur-2xl p-4 sm:p-6 md:p-8 flex flex-col md:flex-row gap-4 sm:gap-6 md:gap-12 items-center md:items-start relative -mt-6 sm:-mt-8 mx-2 sm:mx-4 rounded-xl border border-slate-200 dark:border-white/5 shadow-lg">
               
               {/* Avatar with Status indicator */}
-              <div className="relative -mt-16 md:-mt-20 shrink-0">
+              <div className="relative -mt-14 sm:-mt-16 md:-mt-20 shrink-0">
                 <div className="p-[3px] rounded-full bg-gradient-to-tr from-[#FF7A00] to-amber-500 shadow-lg">
                   <img 
-                    src={profile.avatar_url} 
+                    src={profile.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&h=300&q=80"} 
                     alt={profile.username} 
                     referrerPolicy="no-referrer"
-                    className="w-24 h-24 md:w-28 md:h-28 rounded-full border-4 border-white dark:border-[#0A0A0A] object-cover bg-slate-100 dark:bg-black" 
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&h=300&q=80";
+                    }}
+                    className="w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-full border-4 border-white dark:border-[#0A0A0A] object-cover bg-slate-100 dark:bg-black" 
                   />
                 </div>
                 {profile.last_seen === "Online Now" && (
-                  <div className="absolute bottom-1 right-1 w-5 h-5 bg-emerald-500 border-4 border-white dark:border-[#0A0A0A] rounded-full animate-pulse" title="Online now" />
+                  <div className="absolute bottom-1 right-1 w-4 h-4 sm:w-5 sm:h-5 bg-emerald-500 border-2 sm:border-4 border-white dark:border-[#0A0A0A] rounded-full animate-pulse" title="Online now" />
                 )}
               </div>
 
               {/* Profile Details */}
-              <div className="flex-1 flex flex-col gap-4 text-center md:text-left w-full">
+              <div className="flex-1 flex flex-col gap-3 sm:gap-4 text-center md:text-left w-full">
                 
                 {/* Username + Action Controls */}
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="flex items-center justify-center md:justify-start gap-2.5 flex-wrap">
-                    <h2 className="font-display font-extrabold text-xl text-slate-900 dark:text-white">@{profile.username}</h2>
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4">
+                  <div className="flex items-center justify-center md:justify-start gap-2 flex-wrap">
+                    <h2 className="font-display font-extrabold text-lg sm:text-xl text-slate-900 dark:text-white">@{profile.username}</h2>
                     
                     {/* Blue Verified badge */}
-                    {(profile.is_verified === 1 || profile.is_verified === true || profile.username.toLowerCase() === "rayanee" || profile.username.toLowerCase() === "rayane" || profile.email?.toLowerCase() === "rayane@gmail.com") && (
+                    {(Boolean(profile.is_verified) || profile.username.toLowerCase() === "rayanee" || profile.username.toLowerCase() === "rayane" || profile.email?.toLowerCase() === "rayane@gmail.com") && (
                       <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-500 text-white shrink-0 shadow-sm" title="Verified Profile">
                         <Check className="h-3.5 w-3.5 stroke-[3]" />
                       </span>
                     )}
-
-
 
                     {profile.is_private && (
                       <span className="bg-[#FF7A00]/10 text-[#FF7A00] border border-[#FF7A00]/25 rounded-md px-2 py-0.5 text-[9px] font-bold flex items-center gap-0.5 uppercase tracking-wider">
@@ -741,23 +742,23 @@ export const Profile: React.FC<ProfileProps> = ({
                 </div>
 
                 {/* Follower Stats Counters */}
-                <div className="flex gap-8 justify-center md:justify-start py-3 border-y border-slate-100 dark:border-white/5 select-none font-bold text-xs tracking-wider uppercase">
+                <div className="flex gap-4 sm:gap-8 justify-around md:justify-start py-2.5 sm:py-3 border-y border-slate-100 dark:border-white/5 select-none font-bold text-xs tracking-wider uppercase w-full">
                   <div className="flex flex-col md:flex-row md:gap-1.5 items-center">
                     <span className="text-slate-900 dark:text-white text-sm">{profile.posts_count}</span>
-                    <span className="text-slate-400 dark:text-slate-500">Posts</span>
+                    <span className="text-slate-400 dark:text-slate-500 text-[10px] sm:text-xs">Posts</span>
                   </div>
                   <div className="flex flex-col md:flex-row md:gap-1.5 items-center">
                     <span className="text-slate-900 dark:text-white text-sm">{profile.followers_count}</span>
-                    <span className="text-slate-400 dark:text-slate-500">Followers</span>
+                    <span className="text-slate-400 dark:text-slate-500 text-[10px] sm:text-xs">Followers</span>
                   </div>
                   <div className="flex flex-col md:flex-row md:gap-1.5 items-center">
                     <span className="text-slate-900 dark:text-white text-sm">{profile.following_count}</span>
-                    <span className="text-slate-400 dark:text-slate-500">Following</span>
+                    <span className="text-slate-400 dark:text-slate-500 text-[10px] sm:text-xs">Following</span>
                   </div>
                 </div>
 
                 {/* Bio & Extended Luxe Meta (Age, Location, Website) */}
-                <div className="text-xs font-medium text-slate-600 dark:text-slate-400 leading-relaxed max-w-xl">
+                <div className="text-xs font-medium text-slate-600 dark:text-slate-400 leading-relaxed max-w-xl text-left">
                   
                   {/* Name details */}
                   {profile.name && (
@@ -765,16 +766,16 @@ export const Profile: React.FC<ProfileProps> = ({
                   )}
 
                   {profile.bio ? (
-                    <p className="whitespace-pre-line text-slate-600 dark:text-slate-400">{profile.bio}</p>
+                    <p className="whitespace-pre-line text-slate-600 dark:text-slate-400 text-xs sm:text-sm">{profile.bio}</p>
                   ) : (
-                    <p className="text-slate-400 italic">This portfolio has not configured a description bio yet.</p>
+                    <p className="text-slate-400 italic text-xs">This portfolio has not configured a description bio yet.</p>
                   )}
 
                   {/* Extended attributes cards (Website, age, location, gender) */}
-                  <div className="flex flex-wrap gap-x-5 gap-y-2 mt-4 text-slate-500 dark:text-slate-500 text-xs font-semibold">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1.5 sm:gap-x-5 sm:gap-y-2 mt-3 sm:mt-4 text-slate-500 dark:text-slate-500 text-[11px] sm:text-xs font-semibold">
                     {profile.location && (
                       <span className="flex items-center gap-1">
-                        <MapPin className="h-3.5 w-3.5 text-[#FF7A00]" />
+                        <MapPin className="h-3.5 w-3.5 text-[#FF7A00] shrink-0" />
                         {profile.location}
                       </span>
                     )}
@@ -785,43 +786,43 @@ export const Profile: React.FC<ProfileProps> = ({
                         rel="noopener noreferrer" 
                         className="flex items-center gap-1 text-[#FF7A00] hover:underline"
                       >
-                        <Link2 className="h-3.5 w-3.5" />
+                        <Link2 className="h-3.5 w-3.5 shrink-0" />
                         {profile.website.replace(/^https?:\/\/(www\.)?/, "")}
                       </a>
                     )}
                     {profile.age && (
                       <span className="flex items-center gap-1">
-                        <Calendar className="h-3.5 w-3.5" />
+                        <Calendar className="h-3.5 w-3.5 shrink-0" />
                         {profile.age}
                       </span>
                     )}
                     {profile.gender && (
                       <span className="flex items-center gap-1">
-                        <UserIcon className="h-3.5 w-3.5" />
+                        <UserIcon className="h-3.5 w-3.5 shrink-0" />
                         {profile.gender}
                       </span>
                     )}
                   </div>
 
                   {/* Instagram-style action buttons row for mobile */}
-                  <div className="flex md:hidden items-center gap-2 mt-5 w-full select-none">
+                  <div className="flex md:hidden items-center gap-1.5 sm:gap-2 mt-4 sm:mt-5 w-full select-none flex-wrap">
                     {profile.is_current_user ? (
                       <>
                         <button
                           onClick={() => setIsEditOpen(true)}
-                          className="flex-1 py-2 text-center bg-slate-100 dark:bg-[#262626] hover:bg-slate-200 dark:hover:bg-neutral-800 text-slate-900 dark:text-white font-semibold text-xs rounded-lg transition-all cursor-pointer border border-transparent dark:border-white/5 shadow-xs"
+                          className="flex-1 min-w-[100px] py-2 px-2 text-center bg-slate-100 dark:bg-[#262626] hover:bg-slate-200 dark:hover:bg-neutral-800 text-slate-900 dark:text-white font-semibold text-xs rounded-lg transition-all cursor-pointer border border-transparent dark:border-white/5 shadow-xs"
                         >
                           Edit Profile
                         </button>
                         <button
                           onClick={handleShareProfile}
-                          className="flex-1 py-2 text-center bg-slate-100 dark:bg-[#262626] hover:bg-slate-200 dark:hover:bg-neutral-800 text-slate-900 dark:text-white font-semibold text-xs rounded-lg transition-all cursor-pointer border border-transparent dark:border-white/5 shadow-xs"
+                          className="flex-1 min-w-[100px] py-2 px-2 text-center bg-slate-100 dark:bg-[#262626] hover:bg-slate-200 dark:hover:bg-neutral-800 text-slate-900 dark:text-white font-semibold text-xs rounded-lg transition-all cursor-pointer border border-transparent dark:border-white/5 shadow-xs"
                         >
                           Share Profile
                         </button>
                         <button
                           onClick={logout}
-                          className="px-3.5 py-2 text-center bg-red-100 dark:bg-red-950/20 text-red-600 dark:text-red-400 font-semibold text-xs rounded-lg transition-all cursor-pointer border border-transparent dark:border-red-900/10"
+                          className="px-3 py-2 text-center bg-red-100 dark:bg-red-950/20 text-red-600 dark:text-red-400 font-semibold text-xs rounded-lg transition-all cursor-pointer border border-transparent dark:border-red-900/10"
                           title="Logout"
                         >
                           <LogOut className="h-3.5 w-3.5" />
@@ -832,14 +833,14 @@ export const Profile: React.FC<ProfileProps> = ({
                         {profile.follow_status === "pending" ? (
                           <button
                             onClick={handleFollowToggle}
-                            className="flex-1 py-2 text-center bg-slate-200 dark:bg-neutral-800 text-slate-600 dark:text-slate-400 font-semibold text-xs rounded-lg transition-all cursor-pointer"
+                            className="flex-1 min-w-[80px] py-2 text-center bg-slate-200 dark:bg-neutral-800 text-slate-600 dark:text-slate-400 font-semibold text-xs rounded-lg transition-all cursor-pointer"
                           >
                             Requested
                           </button>
                         ) : (
                           <button
                             onClick={handleFollowToggle}
-                            className={`flex-1 py-2 text-center font-semibold text-xs rounded-lg transition-all cursor-pointer ${
+                            className={`flex-1 min-w-[80px] py-2 text-center font-semibold text-xs rounded-lg transition-all cursor-pointer ${
                               profile.is_following
                                 ? "bg-slate-100 dark:bg-[#262626] text-slate-950 dark:text-white border border-transparent dark:border-white/5"
                                 : "bg-[#0095F6] hover:bg-[#1877F2] text-white"
@@ -859,7 +860,7 @@ export const Profile: React.FC<ProfileProps> = ({
                                 bio: profile.bio
                               });
                             }}
-                            className="flex-1 py-2 text-center bg-slate-100 dark:bg-[#262626] text-slate-950 dark:text-white font-semibold text-xs rounded-lg transition-all cursor-pointer border border-transparent dark:border-white/5"
+                            className="flex-1 min-w-[80px] py-2 text-center bg-slate-100 dark:bg-[#262626] text-slate-950 dark:text-white font-semibold text-xs rounded-lg transition-all cursor-pointer border border-transparent dark:border-white/5"
                           >
                             Message
                           </button>
@@ -893,11 +894,11 @@ export const Profile: React.FC<ProfileProps> = ({
           ) : (
             <>
               {/* Tab Selector Buttons */}
-              <div id="grid-tabs" className="flex items-center justify-center border-b border-slate-200 dark:border-white/5 mb-8 font-bold text-xs tracking-widest uppercase select-none">
+              <div id="grid-tabs" className="flex items-center justify-center border-b border-slate-200 dark:border-white/5 mb-6 sm:mb-8 font-bold text-xs tracking-widest uppercase select-none overflow-x-auto">
                 <button
                   id="tab-posts"
                   onClick={() => setActiveTab("posts")}
-                  className={`flex items-center gap-2 px-8 py-4 transition-all border-b-2 cursor-pointer ${
+                  className={`flex items-center gap-1.5 sm:gap-2 px-4 sm:px-8 py-3.5 sm:py-4 transition-all border-b-2 cursor-pointer shrink-0 ${
                     activeTab === "posts" 
                       ? "border-[#FF7A00] text-[#FF7A00]" 
                       : "border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-white"
@@ -909,7 +910,7 @@ export const Profile: React.FC<ProfileProps> = ({
                 <button
                   id="tab-reels"
                   onClick={() => setActiveTab("reels")}
-                  className={`flex items-center gap-2 px-8 py-4 transition-all border-b-2 cursor-pointer ${
+                  className={`flex items-center gap-1.5 sm:gap-2 px-4 sm:px-8 py-3.5 sm:py-4 transition-all border-b-2 cursor-pointer shrink-0 ${
                     activeTab === "reels" 
                       ? "border-[#FF7A00] text-[#FF7A00]" 
                       : "border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-white"
@@ -922,7 +923,7 @@ export const Profile: React.FC<ProfileProps> = ({
                   <button
                     id="tab-bookmarks"
                     onClick={() => setActiveTab("bookmarks")}
-                    className={`flex items-center gap-2 px-8 py-4 transition-all border-b-2 cursor-pointer ${
+                    className={`flex items-center gap-1.5 sm:gap-2 px-4 sm:px-8 py-3.5 sm:py-4 transition-all border-b-2 cursor-pointer shrink-0 ${
                       activeTab === "bookmarks" 
                         ? "border-[#FF7A00] text-[#FF7A00]" 
                         : "border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-white"
@@ -936,7 +937,7 @@ export const Profile: React.FC<ProfileProps> = ({
                   <button
                     id="tab-owner"
                     onClick={() => setActiveTab("owner")}
-                    className={`flex items-center gap-2 px-8 py-4 transition-all border-b-2 cursor-pointer ${
+                    className={`flex items-center gap-1.5 sm:gap-2 px-4 sm:px-8 py-3.5 sm:py-4 transition-all border-b-2 cursor-pointer shrink-0 ${
                       activeTab === "owner" 
                         ? "border-blue-500 text-blue-500 font-extrabold" 
                         : "border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-white"

@@ -162,9 +162,12 @@ export const Layout: React.FC<LayoutProps> = ({ currentTab, setTab, children, is
             <div className="flex items-center gap-3.5 px-2 py-1">
               <div className="relative">
                 <img 
-                  src={user.avatar_url} 
+                  src={user.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80"} 
                   alt={user.username} 
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80";
+                  }}
                   className="w-11 h-11 rounded-full border-2 border-[#0095F6]/30 object-cover shadow-md" 
                 />
                 <div className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-black rounded-full" />
@@ -252,8 +255,12 @@ export const Layout: React.FC<LayoutProps> = ({ currentTab, setTab, children, is
                 }`}
               >
                 <img
-                  src={user.avatar_url}
+                  src={user.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&h=100&q=80"}
                   alt={user.username}
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&h=100&q=80";
+                  }}
                   className="w-6.5 h-6.5 rounded-full object-cover border border-white/20"
                 />
               </button>

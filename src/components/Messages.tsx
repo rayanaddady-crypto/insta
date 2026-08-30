@@ -1966,9 +1966,8 @@ export const Messages: React.FC<MessagesProps> = ({ onSelectUserProfile, onConve
                   >
                     <div 
                       className={`relative p-0.5 rounded-full transition-all duration-200 ${
-                        isSelected ? "scale-105 ring-2" : "ring-1 ring-white/15 hover:ring-white/40 group-hover:scale-105"
+                        isSelected ? "scale-105 ring-2 ring-blue-500" : "ring-1 ring-white/15 hover:ring-white/40 group-hover:scale-105"
                       }`}
-                      style={isSelected ? { ringColor: themeConfig.accentColor } : {}}
                     >
                       <img
                         src={f.avatar_url}
