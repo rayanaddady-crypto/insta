@@ -572,10 +572,10 @@ export const MusicPickerModal: React.FC<MusicPickerModalProps> = ({
   const handleWaveformTouchMove = (e: React.TouchEvent) => {
     if (!isDraggingWaveform.current || maxStartTime <= 0) return;
     const deltaX = e.touches[0].clientX - dragStartX.current;
-    const secondsDelta = -(deltaX / 4);
-    const nextStart = Math.min(maxStartTime, Math.max(0, Math.floor(initialStartTimeOnDrag.current + secondsDelta)));
+    const secondsDelta = -(deltaX / 3.5);
+    const nextStart = Math.min(maxStartTime, Math.max(0, Math.round(initialStartTimeOnDrag.current + secondsDelta)));
     setStartTime(nextStart);
-    if (audioRef.current) {
+    if (audioRef.current && Math.abs(audioRef.current.currentTime - nextStart) > 0.5) {
       audioRef.current.currentTime = nextStart;
     }
   };
@@ -688,19 +688,29 @@ export const MusicPickerModal: React.FC<MusicPickerModalProps> = ({
                   />
                 </div>
 
-                {/* Invisible Range Slider overlay for smooth tapping */}
+                {/* Invisible Range Slider overlay for smooth tapping and finger dragging */}
                 <input
                   type="range"
                   min={0}
                   max={maxStartTime > 0 ? maxStartTime : 0}
-                  step={1}
+                  step={0.5}
                   value={startTime}
                   onChange={(e) => {
                     const next = Number(e.target.value);
                     setStartTime(next);
                     if (audioRef.current) audioRef.current.currentTime = next;
                   }}
-                  className="absolute inset-0 w-full opacity-0 cursor-pointer h-full"
+                  onTouchStart={(e) => {
+                    e.stopPropagation();
+                  }}
+                  onTouchMove={(e) => {
+                    e.stopPropagation();
+                    const next = Number(e.currentTarget.value);
+                    setStartTime(next);
+                    if (audioRef.current) audioRef.current.currentTime = next;
+                  }}
+                  className="absolute inset-0 w-full opacity-0 cursor-pointer h-full touch-none"
+                  style={{ touchAction: "none" }}
                 />
               </div>
 
@@ -726,9 +736,11 @@ export const MusicPickerModal: React.FC<MusicPickerModalProps> = ({
                 onMouseMove={handleWaveformMouseMove}
                 onTouchStart={handleWaveformTouchStart}
                 onTouchMove={handleWaveformTouchMove}
+                onTouchEnd={handleWaveformMouseUp}
                 className={`relative ${
                   isCompactPhone ? "h-16" : "h-18 sm:h-20"
-                } w-full flex items-center justify-center overflow-hidden cursor-grab active:cursor-grabbing select-none`}
+                } w-full flex items-center justify-center overflow-hidden cursor-grab active:cursor-grabbing select-none touch-none`}
+                style={{ touchAction: "none" }}
               >
                 {/* Horizontal Waveform Frequency Lines Strip */}
                 <div 

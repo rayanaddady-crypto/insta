@@ -35,6 +35,7 @@ export const InstagramNotesBar: React.FC<InstagramNotesBarProps> = ({
 
   // Modals & Popups
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isMyNoteViewerOpen, setIsMyNoteViewerOpen] = useState(false);
   const [isMusicPickerOpen, setIsMusicPickerOpen] = useState(false);
   const [selectedFriendNote, setSelectedFriendNote] = useState<InstagramNote | null>(null);
   const [replyText, setReplyText] = useState("");
@@ -218,15 +219,10 @@ export const InstagramNotesBar: React.FC<InstagramNotesBarProps> = ({
   const handleOpenMyNote = () => {
     playSound("click");
     if (myNote) {
-      setNoteText(myNote.text);
-      setSelectedEmoji(myNote.mood_emoji || "💭");
-      setMusicTrack(myNote.music_track || "");
-      setMusicTitle(myNote.music_title || "");
-      setMusicArtist(myNote.music_artist || "");
-      setMusicUrl(myNote.music_url || "");
-      setMusicCover(myNote.music_cover || "");
-      setMusicStartTime(myNote.music_start_time || 0);
-      setAudience(myNote.audience === "close_friends" ? "close_friends" : "followers");
+      setIsMyNoteViewerOpen(true);
+      if (myNote.music_url) {
+        handleToggleNoteAudio(myNote.music_url, myNote.music_start_time || 0);
+      }
     } else {
       setNoteText("");
       setSelectedEmoji("💭");
@@ -237,8 +233,8 @@ export const InstagramNotesBar: React.FC<InstagramNotesBarProps> = ({
       setMusicCover("");
       setMusicStartTime(0);
       setAudience("followers");
+      setIsCreateModalOpen(true);
     }
-    setIsCreateModalOpen(true);
   };
 
   const handleSelectTrackFromPicker = (track: {
@@ -1038,6 +1034,206 @@ export const InstagramNotesBar: React.FC<InstagramNotesBarProps> = ({
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ====================================================================
+          MODAL: VIEW YOUR OWN NOTE (JUST LISTEN TO MUSIC & NEW NOTE / DELETE OPTIONS)
+          ==================================================================== */}
+      <AnimatePresence>
+        {isMyNoteViewerOpen && myNote && user && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xl flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <motion.div
+              initial={{ opacity: 0, y: 40 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 40 }}
+              className="w-full max-w-sm bg-[#121214] border-t sm:border border-white/10 rounded-t-[34px] sm:rounded-[32px] p-5 sm:p-6 shadow-2xl relative text-white"
+            >
+              {/* Close Button */}
+              <button
+                type="button"
+                id="my-note-viewer-close-btn"
+                onClick={() => {
+                  if (noteAudioRef.current) {
+                    noteAudioRef.current.pause();
+                  }
+                  setIsPlaying(false);
+                  setIsMyNoteViewerOpen(false);
+                }}
+                className="absolute top-4 right-4 p-2 rounded-full hover:bg-white/10 text-neutral-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="h-4.5 w-4.5" />
+              </button>
+
+              <div className="flex flex-col items-center text-center mb-4">
+                {/* Avatar with Big Thought Bubble */}
+                <div className="relative mb-3 cursor-pointer select-none group">
+                  <img
+                    src={user.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&h=300&q=80"}
+                    alt={user.username}
+                    referrerPolicy="no-referrer"
+                    className={`w-20 h-20 rounded-full object-cover shadow-xl ${
+                      myNote.audience === "close_friends"
+                        ? "border-3 border-emerald-500 ring-4 ring-emerald-500/20"
+                        : "border-3 border-[#0095F6] ring-4 ring-blue-500/20"
+                    }`}
+                  />
+                  
+                  {/* Thought Bubble */}
+                  <div className={`absolute -top-4 -right-3 px-3.5 py-2 rounded-[20px] text-xs font-semibold flex items-center gap-1.5 shadow-2xl border ${
+                    myNote.audience === "close_friends"
+                      ? "bg-[#102414] border-emerald-500/50 text-emerald-300"
+                      : "bg-[#222222] border-white/20 text-white"
+                  }`}>
+                    <span className="text-base">{myNote.mood_emoji || "💭"}</span>
+                    <span className="max-w-[120px] truncate">{myNote.text}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <h3 className="font-bold text-base text-white">Your Note</h3>
+                  {myNote.audience === "close_friends" && (
+                    <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 text-[10px] font-bold rounded-full border border-emerald-500/30 flex items-center gap-0.5">
+                      <Star className="h-2.5 w-2.5 fill-emerald-400" />
+                      Close Friends
+                    </span>
+                  )}
+                </div>
+
+                {/* Interactive Music Player Card with Timeline to LISTEN TO MUSIC */}
+                {(myNote.music_track || myNote.music_url) ? (
+                  <div className="w-full mt-3 p-3.5 bg-[#1A1A1D] border border-white/10 rounded-2xl shadow-inner text-left">
+                    <div className="flex items-center gap-3">
+                      {/* Spinning Vinyl Cover Art */}
+                      <div className="relative shrink-0">
+                        <div
+                          className={`w-12 h-12 rounded-full overflow-hidden border-2 border-white/20 shadow-md ${
+                            isPlaying && playingAudioUrl === myNote.music_url
+                              ? "animate-[spin_4s_linear_infinite]"
+                              : ""
+                          }`}
+                        >
+                          <img
+                            src={
+                              myNote.music_cover ||
+                              "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=300&h=300&q=80"
+                            }
+                            alt="Cover"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <div className="absolute inset-0 m-auto w-3 h-3 rounded-full bg-black border border-white/40" />
+                      </div>
+
+                      {/* Song & Artist Info */}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-white truncate">
+                          {myNote.music_title || myNote.music_track}
+                        </p>
+                        <p className="text-[10px] text-neutral-400 truncate">
+                          {myNote.music_artist || "Instagram Music"}
+                        </p>
+                        
+                        {/* Audio Progress Bar */}
+                        <div className="w-full bg-white/10 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                          <div
+                            className="bg-[#0095F6] h-full transition-all duration-150"
+                            style={{
+                              width: `${
+                                isPlaying && playingAudioUrl === myNote.music_url && playbackDuration > 0
+                                  ? (playbackCurrentTime / playbackDuration) * 100
+                                  : 0
+                              }%`
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Play & Mute Controls */}
+                      {myNote.music_url && (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            id="my-note-play-toggle-btn"
+                            onClick={(e) => handleToggleNoteAudio(myNote.music_url!, myNote.music_start_time || 0, e)}
+                            className="w-9 h-9 rounded-full bg-[#0095F6] hover:bg-[#0081D6] text-white flex items-center justify-center transition-transform active:scale-90 cursor-pointer shadow-md"
+                          >
+                            {isPlaying && playingAudioUrl === myNote.music_url ? (
+                              <Pause className="h-4.5 w-4.5 fill-white" />
+                            ) : (
+                              <Play className="h-4.5 w-4.5 fill-white ml-0.5" />
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={handleToggleMute}
+                            className="p-1.5 text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                          >
+                            {isMuted ? (
+                              <VolumeX className="h-4 w-4 text-red-400" />
+                            ) : (
+                              <Volume2 className="h-4 w-4 text-neutral-300" />
+                            )}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="w-full mt-3 p-3 bg-white/5 border border-white/10 rounded-2xl text-center text-xs text-neutral-400">
+                    No soundtrack added to this note.
+                  </div>
+                )}
+              </div>
+
+              {/* Action Buttons: New Note & Delete Note */}
+              <div className="grid grid-cols-2 gap-2.5 mt-2">
+                <button
+                  type="button"
+                  id="my-note-new-note-btn"
+                  onClick={() => {
+                    if (noteAudioRef.current) {
+                      noteAudioRef.current.pause();
+                    }
+                    setIsPlaying(false);
+                    setIsMyNoteViewerOpen(false);
+                    setNoteText(myNote.text);
+                    setSelectedEmoji(myNote.mood_emoji || "💭");
+                    setMusicTrack(myNote.music_track || "");
+                    setMusicTitle(myNote.music_title || "");
+                    setMusicArtist(myNote.music_artist || "");
+                    setMusicUrl(myNote.music_url || "");
+                    setMusicCover(myNote.music_cover || "");
+                    setMusicStartTime(myNote.music_start_time || 0);
+                    setAudience(myNote.audience === "close_friends" ? "close_friends" : "followers");
+                    setIsCreateModalOpen(true);
+                  }}
+                  className="py-3 px-3 rounded-2xl bg-[#0095F6] hover:bg-[#0081D6] text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md active:scale-95"
+                >
+                  <Plus className="h-4 w-4" />
+                  New Note
+                </button>
+
+                <button
+                  type="button"
+                  id="my-note-delete-note-btn"
+                  onClick={() => {
+                    if (noteAudioRef.current) {
+                      noteAudioRef.current.pause();
+                    }
+                    setIsPlaying(false);
+                    handleDeleteNote();
+                    setIsMyNoteViewerOpen(false);
+                  }}
+                  className="py-3 px-3 rounded-2xl bg-red-950/50 hover:bg-red-900/70 text-red-400 border border-red-900/40 text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete Note
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

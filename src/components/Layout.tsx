@@ -230,9 +230,9 @@ export const Layout: React.FC<LayoutProps> = ({ currentTab, setTab, children, is
       {/* --- MAIN WORKSPACE --- */}
       <main id="main-workspace" className={`flex-1 ${
         isChatActive 
-          ? "h-[100dvh] max-h-[100dvh] overflow-hidden pb-0" 
+          ? "h-[100dvh] max-h-[100dvh] min-h-0 overflow-hidden pb-0" 
           : currentTab === "messages" 
-          ? "h-[calc(100vh-4rem)] md:h-screen overflow-hidden pb-0" 
+          ? "h-[calc(100vh-4rem)] md:h-screen min-h-0 overflow-hidden pb-0" 
           : "overflow-y-auto max-h-screen md:h-screen pb-20 md:pb-0"
       } bg-black text-white transition-colors duration-300`}>
         {children}
