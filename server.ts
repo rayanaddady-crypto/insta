@@ -80,12 +80,12 @@ function fallbackToLocalDb() {
   });
 }
 
+const isRemoteUrl = TURSO_URL.startsWith("http") || TURSO_URL.startsWith("libsql");
+
 // A SQLITE_* code means the remote database answered and rejected the statement,
 // so the connection is healthy and falling back would silently strand real data.
 const shouldFallback = (err: any): boolean =>
-  !isLocalFallback &&
-  (TURSO_URL.startsWith("http") || TURSO_URL.startsWith("libsql")) &&
-  !String(err?.code ?? "").startsWith("SQLITE_");
+  !isLocalFallback && isRemoteUrl && !String(err?.code ?? "").startsWith("SQLITE_");
 
 // Low-level query functions (used by initialization to prevent circular deadlocks)
 const rawExecute = async (sql: string, args: any[] = []): Promise<any> => {
@@ -148,6 +148,10 @@ async function checkDbConnection() {
     await Promise.race([turso.execute("SELECT 1"), timeoutPromise]);
     console.log("⚡ [Turso DB] Database connected successfully.");
   } catch (err) {
+    if (isRemoteUrl) {
+      console.warn("⚠️ [Turso DB] Remote connection check failed or timed out; keeping the configured remote database:", err);
+      return;
+    }
     console.warn("⚠️ [Turso DB] Remote connection bypassed or timed out, loading local SQLite file fallback:", err);
     fallbackToLocalDb();
   }
